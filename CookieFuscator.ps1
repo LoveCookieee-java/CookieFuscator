@@ -19,6 +19,7 @@ param (
 $ErrorActionPreference = "Stop"
 $EngineRoot = "E:\SERVER\plugin-pre\Unique\Obf Logic"
 $EngineScript = "$EngineRoot\engine\universal_engine.py"
+$PackerScript = "$EngineRoot\engine\ResourcePacker.py"
 $DictFile = "$EngineRoot\dictionaries\confusing_dict.txt"
 $PgJar = "$EngineRoot\tools\proguard.jar"
 $JavaBin = "C:\Program Files\Eclipse Adoptium\jdk-21.0.8.9-hotspot\bin\java.exe"
@@ -93,8 +94,8 @@ $autoCfgPath = "$EngineRoot\configs\auto_$($info.name)_proguard.pro"
 & python "$EngineScript" generate_config "$Target" "$DictFile" "$Repackage" "$autoCfgPath"
 Write-Host "[v] Config generated at: $autoCfgPath" -ForegroundColor Green
 
-# 4. String Encryption Transformer (ASM 9.6)
-Write-Host "`n[4/6] Encrypting All String Literals (Dynamic Bytecode Cipher)..." -ForegroundColor Cyan
+# 4. String Encryption & AST Traps Transformer (ASM 9.6)
+Write-Host "`n[4/6] Encrypting All String Literals & Injecting AST Traps..." -ForegroundColor Cyan
 $strEncJar = "$EngineRoot\dist\temp_$($info.name)_strenc.jar"
 $strCp = "$StrEncTool;$AsmJar;$AsmTree;$AsmCommons"
 & $JavaBin -cp $strCp engine.StringEncryptor "$inputJar" "$strEncJar"
@@ -134,8 +135,8 @@ if (-not (Test-Path $obfTempJar)) {
 }
 Write-Host "[v] ProGuard Stage Succeeded." -ForegroundColor Green
 
-# 6. Profile Finalization (Standard vs Ultra)
-Write-Host "`n[6/6] Finalizing Output Profile [$Profile] & Encrypting Internal Resources..." -ForegroundColor Cyan
+# 6. Profile Finalization (Standard vs Ultra Steganography)
+Write-Host "`n[6/6] Finalizing Output Profile [$Profile] & Polyglot PNG Steganography..." -ForegroundColor Cyan
 if (-not (Test-Path $OutputDir)) {
     New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
 }
@@ -145,8 +146,8 @@ if (-not $cleanVer) { $cleanVer = "1.0.0" }
 $finalDistJar = Join-Path $OutputDir "$($info.name)-$cleanVer-PROT.jar"
 
 if ($Profile -eq "Ultra") {
-    # Decoy Stub Injection (Pack all classes AND all internal YAMLs/resources into assets/engine.dat)
-    Write-Host "  -> Encrypting Bytecode & All Internal YAML Resources into assets/engine.dat..." -ForegroundColor Yellow
+    # Decoy Stub Injection with Polyglot PNG Container (assets/icon.png zTXt chunk)
+    Write-Host "  -> Packing All Bytecode & Internal YAMLs into Steganographic Container (assets/icon.png)..." -ForegroundColor Yellow
     $bootBin = "$EngineRoot\CookieFuscator\bootstrap_bin"
     $bootSrc = "$EngineRoot\CookieFuscator\bootstrap_src\cookie\fack\please\d111\Bootstrap.java"
     $paperJar = "C:\Users\KHOA\.m2\repository\io\papermc\paper\paper-api\1.21.4-R0.1-SNAPSHOT\paper-api-1.21.4-R0.1-SNAPSHOT.jar"
@@ -155,57 +156,7 @@ if ($Profile -eq "Ultra") {
     & $javac -cp $paperJar -d $bootBin $bootSrc | Out-Null
     $bootCls = "$bootBin\cookie\fack\please\d111\Bootstrap.class"
 
-    & python -c "
-import zipfile, io, os
-v2 = r'$obfTempJar'
-boot_cls = r'$bootCls'
-final_jar = r'$finalDistJar'
-def enc(b):
-    out = bytearray(len(b))
-    rk = 0x5D
-    for i in range(len(b)):
-        p = b[i]
-        out[i] = ((p + (i & 0x0F)) & 0xFF) ^ rk
-        rk = ((rk * 37) ^ p) & 0xFF
-    return bytes(out)
-
-with open(boot_cls, 'rb') as bf: boot_bytes = bf.read()
-with zipfile.ZipFile(v2, 'r') as zin:
-    names = zin.namelist()
-    
-    # Everything except manifest and plugin.yml goes into encrypted engine.dat
-    engine_buf = io.BytesIO()
-    with zipfile.ZipFile(engine_buf, 'w', compression=zipfile.ZIP_DEFLATED) as ez:
-        for item in zin.infolist():
-            fn = item.filename
-            if fn.startswith('META-INF/') or fn in ['plugin.yml', 'bungee.yml', 'velocity-plugin.json']:
-                continue
-            if not fn.endswith('/'):
-                ez.writestr(fn, zin.read(fn))
-                
-    enc_engine = enc(engine_buf.getvalue())
-    
-    with zipfile.ZipFile(final_jar, 'w', compression=zipfile.ZIP_DEFLATED) as zout:
-        for item in zin.infolist():
-            fn = item.filename
-            # Exclude all classes, all internal YAMLs/resources, and shaded directories
-            if fn.endswith('.class') or fn.endswith('.yml') or fn.endswith('.yaml') or fn.endswith('.json') or fn.endswith('.bin') or fn.endswith('.txt'):
-                if fn not in ['plugin.yml', 'bungee.yml']:
-                    continue
-            if fn.startswith('META-INF/maven/') or fn.startswith('dev/') or fn.startswith('mc/') or fn.startswith('mcp/') or fn.startswith('org/') or fn.startswith('io/') or fn.startswith('com/') or fn.startswith('cookie/'):
-                continue
-                
-            if fn in ['plugin.yml', 'bungee.yml']:
-                p_text = zin.read(fn).decode('utf-8')
-                import re
-                new_p = re.sub(r'main:\s*.*', 'main: cookie.fack.please.d111.Bootstrap', p_text)
-                zout.writestr(item, new_p.encode('utf-8'))
-            elif fn.startswith('META-INF/'):
-                zout.writestr(item, zin.read(fn))
-                
-        zout.writestr('cookie/fack/please/d111/Bootstrap.class', boot_bytes)
-        zout.writestr('assets/engine.dat', enc_engine)
-"
+    & python "$PackerScript" pack "$obfTempJar" "$finalDistJar" "$bootCls"
 } else {
     # Standard: Clean metadata & copy to final
     & python "$EngineScript" clean_metadata "$obfTempJar" "$finalDistJar"

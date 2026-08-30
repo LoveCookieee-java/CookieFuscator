@@ -40,10 +40,12 @@ public class StringEncryptor {
                     boolean modified = false;
                     int classKey = 0x4B3D ^ (entry.getName().hashCode() & 0x7FFF);
 
-                    // Skip annotation interfaces and records headers if needed
+                    // Skip annotations and interfaces
                     if ((cn.access & Opcodes.ACC_ANNOTATION) == 0 && (cn.access & Opcodes.ACC_INTERFACE) == 0) {
                         for (MethodNode mn : cn.methods) {
-                            if (mn.instructions == null) continue;
+                            if (mn.instructions == null || mn.name.equals("<clinit>")) continue;
+
+                            // 1. String Encryption Transformer
                             for (AbstractInsnNode insn : mn.instructions.toArray()) {
                                 if (insn.getOpcode() == Opcodes.LDC) {
                                     LdcInsnNode ldc = (LdcInsnNode) insn;
@@ -68,6 +70,12 @@ public class StringEncryptor {
                                         }
                                     }
                                 }
+                            }
+
+                            // 2. Opaque Predicate & Decompiler Trap Injection
+                            if (!mn.name.equals("<init>") && (mn.access & Opcodes.ACC_ABSTRACT) == 0 && (mn.access & Opcodes.ACC_NATIVE) == 0) {
+                                injectOpaquePredicate(mn);
+                                modified = true;
                             }
                         }
 
@@ -99,7 +107,7 @@ public class StringEncryptor {
             }
         }
 
-        System.out.println("[v] String Encryption Complete: " + totalEncrypted + " strings encrypted across " + totalClasses + " classes.");
+        System.out.println("[v] String Encryption & AST Traps Complete: " + totalEncrypted + " strings encrypted across " + totalClasses + " classes.");
     }
 
     private static String encrypt(String s, int key) {
@@ -109,6 +117,35 @@ public class StringEncryptor {
             enc[i] = (byte) (((raw[i] & 0xFF) ^ (key + (i & 0x0F))) & 0xFF);
         }
         return Base64.getEncoder().encodeToString(enc);
+    }
+
+    private static void injectOpaquePredicate(MethodNode mn) {
+        // Invariant: ((System.currentTimeMillis() as int) * ((System.currentTimeMillis() as int) + 1)) % 2 == 0 (Always 0)
+        InsnList trap = new InsnList();
+        LabelNode deadLabel = new LabelNode();
+        LabelNode realStart = new LabelNode();
+
+        trap.add(new MethodInsnNode(Opcodes.INVOKESTATIC, "java/lang/System", "currentTimeMillis", "()J", false));
+        trap.add(new InsnNode(Opcodes.L2I));
+        trap.add(new InsnNode(Opcodes.DUP));
+        trap.add(new InsnNode(Opcodes.ICONST_1));
+        trap.add(new InsnNode(Opcodes.IADD));
+        trap.add(new InsnNode(Opcodes.IMUL));
+        trap.add(new InsnNode(Opcodes.ICONST_2));
+        trap.add(new InsnNode(Opcodes.IREM));
+        trap.add(new JumpInsnNode(Opcodes.IFNE, deadLabel));
+        trap.add(new JumpInsnNode(Opcodes.GOTO, realStart));
+
+        // Dead Code Branch (Never reached)
+        trap.add(deadLabel);
+        trap.add(new TypeInsnNode(Opcodes.NEW, "java/lang/IllegalStateException"));
+        trap.add(new InsnNode(Opcodes.DUP));
+        trap.add(new LdcInsnNode("Security Invariant Check Failed"));
+        trap.add(new MethodInsnNode(Opcodes.INVOKESPECIAL, "java/lang/IllegalStateException", "<init>", "(Ljava/lang/String;)V", false));
+        trap.add(new InsnNode(Opcodes.ATHROW));
+
+        trap.add(realStart);
+        mn.instructions.insert(trap);
     }
 
     private static void addDecryptorMethod(ClassNode cn) {

