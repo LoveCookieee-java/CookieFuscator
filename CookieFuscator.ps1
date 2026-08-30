@@ -25,12 +25,17 @@ $JavaBin = "C:\Program Files\Eclipse Adoptium\jdk-21.0.8.9-hotspot\bin\java.exe"
 $Jmods = "C:\Program Files\Eclipse Adoptium\jdk-21.0.8.9-hotspot\jmods"
 $MavenBin = "E:\SERVER\plugin-pre\test\jpremium-done\.tools\apache-maven-3.9.14\bin\mvn.cmd"
 
+$AsmJar = "C:\Users\KHOA\.m2\repository\org\ow2\asm\asm\9.6\asm-9.6.jar"
+$AsmTree = "C:\Users\KHOA\.m2\repository\org\ow2\asm\asm-tree\9.6\asm-tree-9.6.jar"
+$AsmCommons = "C:\Users\KHOA\.m2\repository\org\ow2\asm\asm-commons\9.6\asm-commons-9.6.jar"
+$StrEncTool = "$EngineRoot\tools\string_encryptor.jar"
+
 Write-Host "`n=======================================================" -ForegroundColor Magenta
 Write-Host "   🍪 COOKIEFUSCATOR - UNIVERSAL OBFUSCATION ENGINE 🍪" -ForegroundColor Magenta
 Write-Host "=======================================================`n" -ForegroundColor Magenta
 
 # 1. Target Inspection
-Write-Host "[1/5] Auto-Inspecting Target Project / Binary..." -ForegroundColor Cyan
+Write-Host "[1/6] Auto-Inspecting Target Project / Binary..." -ForegroundColor Cyan
 if (-not (Test-Path $Target)) {
     Write-Error "[-] Target path does not exist: $Target"
 }
@@ -57,11 +62,11 @@ if ($info.type -eq "SOURCE") {
     $pomFile = Join-Path $Target "pom.xml"
     if (Test-Path $pomFile) {
         if (-not $SkipBuild) {
-            Write-Host "`n[2/5] Compiling Target with Maven..." -ForegroundColor Cyan
+            Write-Host "`n[2/6] Compiling Target with Maven..." -ForegroundColor Cyan
             & $MavenBin clean package -DskipTests -f "$pomFile" | Out-Null
             Write-Host "[v] Maven Build Succeeded." -ForegroundColor Green
         }
-        Write-Host "[2/5] Resolving Dependency Classpath..." -ForegroundColor Cyan
+        Write-Host "[2/6] Resolving Dependency Classpath..." -ForegroundColor Cyan
         & $MavenBin dependency:build-classpath "-Dmdep.outputFile=$classpathFile" -f "$pomFile" | Out-Null
     }
 
@@ -83,16 +88,22 @@ if ($info.type -eq "SOURCE") {
 Write-Host "`n  -> Input JAR: $inputJar" -ForegroundColor Gray
 
 # 3. Dynamic Rule Generation
-Write-Host "`n[3/5] Generating Custom ProGuard Ruleset..." -ForegroundColor Cyan
+Write-Host "`n[3/6] Generating Custom ProGuard Ruleset..." -ForegroundColor Cyan
 $autoCfgPath = "$EngineRoot\configs\auto_$($info.name)_proguard.pro"
 & python "$EngineScript" generate_config "$Target" "$DictFile" "$Repackage" "$autoCfgPath"
 Write-Host "[v] Config generated at: $autoCfgPath" -ForegroundColor Green
 
-# 4. ProGuard 31k Optical Homoglyph Obfuscation
-Write-Host "`n[4/5] Executing ProGuard (31,394 Homoglyphs + Overload Aggressive)..." -ForegroundColor Cyan
+# 4. String Encryption Transformer (ASM 9.6)
+Write-Host "`n[4/6] Encrypting All String Literals (Dynamic Bytecode Cipher)..." -ForegroundColor Cyan
+$strEncJar = "$EngineRoot\dist\temp_$($info.name)_strenc.jar"
+$strCp = "$StrEncTool;$AsmJar;$AsmTree;$AsmCommons"
+& $JavaBin -cp $strCp engine.StringEncryptor "$inputJar" "$strEncJar"
+
+# 5. ProGuard 31k Optical Homoglyph Obfuscation
+Write-Host "`n[5/6] Executing ProGuard (31,394 Homoglyphs + Overload Aggressive)..." -ForegroundColor Cyan
 $obfTempJar = "$EngineRoot\dist\temp_$($info.name)_obf.jar"
 
-$pgArgs = @("-jar", $PgJar, "@$autoCfgPath", "-injars", $inputJar, "-outjars", $obfTempJar)
+$pgArgs = @("-jar", $PgJar, "@$autoCfgPath", "-injars", $strEncJar, "-outjars", $obfTempJar)
 $pgArgs += "-libraryjars"
 $pgArgs += "$Jmods/java.base.jmod(!module-info.class)"
 $pgArgs += "-libraryjars"
@@ -123,8 +134,8 @@ if (-not (Test-Path $obfTempJar)) {
 }
 Write-Host "[v] ProGuard Stage Succeeded." -ForegroundColor Green
 
-# 5. Profile Finalization (Standard vs Ultra)
-Write-Host "`n[5/5] Finalizing Output Profile [$Profile] & Encrypting Internal Resources..." -ForegroundColor Cyan
+# 6. Profile Finalization (Standard vs Ultra)
+Write-Host "`n[6/6] Finalizing Output Profile [$Profile] & Encrypting Internal Resources..." -ForegroundColor Cyan
 if (-not (Test-Path $OutputDir)) {
     New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
 }
@@ -205,7 +216,8 @@ if ($info.type -eq "SOURCE" -and (Test-Path "$targetBaseDir\target")) {
     Copy-Item -Path $finalDistJar -Destination "$targetBaseDir\target\$($info.name)-$cleanVer-PROT.jar" -Force
 }
 
-# Remove temp file
+# Remove temp files
+if (Test-Path $strEncJar) { Remove-Item -Path $strEncJar -Force }
 if (Test-Path $obfTempJar) { Remove-Item -Path $obfTempJar -Force }
 if (Test-Path $classpathFile) { Remove-Item -Path $classpathFile -Force }
 
