@@ -7,8 +7,8 @@ param (
     [Parameter(Mandatory=$true, Position=0)]
     [string]$Target,
 
-    [ValidateSet("Standard", "Ultra")]
-    [string]$Profile = "Standard",
+    [ValidateSet("Ultra", "Standard")]
+    [string]$Profile = "Ultra",
 
     [string]$Repackage = "cookie.fack.please.d111",
     [string]$OutputDir = "E:\SERVER\plugin-pre\Unique\Obf Logic\dist",
@@ -169,7 +169,7 @@ with zipfile.ZipFile(v2, 'r') as zin:
     with zipfile.ZipFile(final_jar, 'w', compression=zipfile.ZIP_DEFLATED) as zout:
         for item in zin.infolist():
             fn = item.filename
-            if fn.endswith('.class') or fn.startswith('META-INF/maven/') or fn.startswith('dev/') or fn.startswith('mc/'):
+            if fn.endswith('.class') or fn.startswith('META-INF/maven/') or fn.startswith('dev/') or fn.startswith('mc/') or fn.startswith('mcp/') or fn.startswith('org/') or fn.startswith('io/') or fn.startswith('com/'):
                 continue
             if fn in ['plugin.yml', 'bungee.yml']:
                 p_text = zin.read(fn).decode('utf-8')
@@ -197,6 +197,6 @@ if (Test-Path $classpathFile) { Remove-Item -Path $classpathFile -Force }
 
 Write-Host "`n=======================================================" -ForegroundColor Green
 Write-Host " [v] COOKIEFUSCATOR OBFUSCATION COMPLETED SUCCESSFULLY!" -ForegroundColor Green
-Write-Host " Output Binary:" -ForegroundColor White
+Write-Host " Output Binary (Profile: $Profile):" -ForegroundColor White
 Write-Host "   * $finalDistJar" -ForegroundColor Yellow
 Write-Host "=======================================================`n" -ForegroundColor Green

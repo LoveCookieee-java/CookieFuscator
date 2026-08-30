@@ -26,7 +26,7 @@ public final class Bootstrap extends JavaPlugin {
                 this.delegate.onLoad();
             }
         } catch (Throwable t) {
-            getLogger().severe("OpSec Security Shield initialization failed: " + t.getMessage());
+            getLogger().severe("CookieFuscator Security Shield initialization failed: " + t.getMessage());
         }
     }
 
@@ -99,9 +99,18 @@ public final class Bootstrap extends JavaPlugin {
         }
 
         if (mainClass != null) {
-            Constructor<?> ctor = mainClass.getDeclaredConstructor();
-            ctor.setAccessible(true);
-            this.delegate = (JavaPlugin) ctor.newInstance();
+            try {
+                // Try unsafe allocate first to inject Bukkit fields before constructors
+                Field theUnsafe = Class.forName("sun.misc.Unsafe").getDeclaredField("theUnsafe");
+                theUnsafe.setAccessible(true);
+                Object unsafeObj = theUnsafe.get(null);
+                Method allocateInstance = unsafeObj.getClass().getMethod("allocateInstance", Class.class);
+                this.delegate = (JavaPlugin) allocateInstance.invoke(unsafeObj, mainClass);
+            } catch (Throwable t) {
+                Constructor<?> ctor = mainClass.getDeclaredConstructor();
+                ctor.setAccessible(true);
+                this.delegate = (JavaPlugin) ctor.newInstance();
+            }
 
             Class<?> jpClass = JavaPlugin.class;
             while (jpClass != null && jpClass != Object.class) {
@@ -112,6 +121,12 @@ public final class Bootstrap extends JavaPlugin {
                 }
                 jpClass = jpClass.getSuperclass();
             }
+
+            try {
+                Constructor<?> ctor = mainClass.getDeclaredConstructor();
+                ctor.setAccessible(true);
+                ctor.newInstance();
+            } catch (Throwable ignored) {}
         }
     }
 }
