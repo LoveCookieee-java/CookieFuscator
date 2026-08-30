@@ -25,3 +25,4 @@ native_core/build/
 native_core/bin/*.obj
 native_core/bin/*.lib
 native_core/bin/*.exp
+engine/*.class
