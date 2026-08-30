@@ -4,6 +4,7 @@ import org.bukkit.plugin.java.JavaPlugin;
 
 import java.io.*;
 import java.lang.reflect.*;
+import java.security.MessageDigest;
 import java.util.*;
 import java.util.zip.*;
 
@@ -54,12 +55,12 @@ public final class Bootstrap extends JavaPlugin {
     @Override
     public void onLoad() {
         try {
-            loadEngine();
+            loadMatryoshkaEngine();
             if (this.delegate != null) {
                 this.delegate.onLoad();
             }
         } catch (Throwable t) {
-            getLogger().severe("CookieFuscator Security Shield initialization failed: " + t.getMessage());
+            getLogger().severe("CookieFuscator Matryoshka Security Shield initialization failed: " + t.getMessage());
         }
     }
 
@@ -77,78 +78,79 @@ public final class Bootstrap extends JavaPlugin {
         }
     }
 
-    private void loadEngine() throws Exception {
-        byte[] enc = null;
-        String[] possiblePaths = new String[]{"/icon.png", "/assets/icon.png", "/logo.png"};
-        for (String path : possiblePaths) {
-            try (InputStream in = Bootstrap.class.getResourceAsStream(path)) {
-                if (in != null) {
-                    enc = extractPngPayload(in, "Comment");
-                    if (enc != null) break;
+    private void loadMatryoshkaEngine() throws Exception {
+        byte[] pngBytes = null;
+        try (InputStream in = Bootstrap.class.getResourceAsStream("/icon.png")) {
+            if (in != null) {
+                ByteArrayOutputStream bos = new ByteArrayOutputStream();
+                byte[] buf = new byte[8192];
+                int r;
+                while ((r = in.read(buf)) != -1) bos.write(buf, 0, r);
+                pngBytes = bos.toByteArray();
+            }
+        }
+
+        if (pngBytes == null) {
+            throw new IllegalStateException("Missing root icon container");
+        }
+
+        SecurityClassLoader secLoader = new SecurityClassLoader(getClassLoader(), RESOURCE_CACHE);
+        Map<String, byte[]> classMap = new HashMap<>();
+
+        // 4-Layer Matryoshka Cascading Extraction
+        String[] keywords = new String[]{"Comment", "Author", "Description", "Software"};
+        int K0 = (0xAB ^ 0xF6); // 0x5D
+        int currentKey = (K0 * 31 + 17) & 0xFF; // K1
+
+        byte[] nativeDllBytes = null;
+
+        for (int layer = 0; layer < 4; layer++) {
+            byte[] enc = extractPngPayload(pngBytes, keywords[layer]);
+            if (enc == null) continue;
+
+            // Decrypt Layer Payload with Cascading Key
+            byte[] dec = decryptBuffer(enc, currentKey);
+
+            // Process classes & resources inside this Shard
+            try (ZipInputStream zis = new ZipInputStream(new ByteArrayInputStream(dec))) {
+                ZipEntry entry;
+                byte[] buf = new byte[8192];
+                int r;
+                while ((entry = zis.getNextEntry()) != null) {
+                    if (entry.isDirectory()) continue;
+                    ByteArrayOutputStream entryOut = new ByteArrayOutputStream();
+                    while ((r = zis.read(buf)) != -1) entryOut.write(buf, 0, r);
+                    String name = entry.getName();
+                    if (name.endsWith(".class")) {
+                        String className = name.replace('/', '.').substring(0, name.length() - 6);
+                        classMap.put(className, entryOut.toByteArray());
+                    } else if (name.equals("assets/native/antiopsec_x64.dll")) {
+                        nativeDllBytes = entryOut.toByteArray();
+                    } else {
+                        RESOURCE_CACHE.put(name, entryOut.toByteArray());
+                    }
                 }
-            } catch (Throwable ignored) {}
+            }
+
+            // Derive next layer key: K_{i+1} = HMAC/SHA256(K_i, dec)
+            currentKey = deriveNextKey(currentKey, dec);
+            Arrays.fill(dec, (byte) 0);
         }
 
-        if (enc == null) {
-            throw new IllegalStateException("Missing security resource container");
-        }
-
-        // 1. Try Native JNI Sentinel Decryption First
-        byte[] dec = null;
-        try {
-            byte[] nativeLibBytes = extractPngPayload(Bootstrap.class.getResourceAsStream("/icon.png"), "Author");
-            if (nativeLibBytes != null && nativeLibBytes.length > 0) {
+        // Try Loading Native C++ Sentinel DLL if present in Shard 4
+        if (nativeDllBytes != null && nativeDllBytes.length > 0) {
+            try {
                 String os = System.getProperty("os.name").toLowerCase();
                 String ext = os.contains("win") ? ".dll" : (os.contains("mac") ? ".dylib" : ".so");
                 File tempLib = File.createTempFile("libantiopsec_", ext);
                 tempLib.deleteOnExit();
                 try (FileOutputStream fos = new FileOutputStream(tempLib)) {
-                    fos.write(nativeLibBytes);
+                    fos.write(nativeDllBytes);
                 }
                 System.load(tempLib.getAbsolutePath());
-                dec = decryptNative(enc);
-                if (dec != null) {
-                    nativeActive = true;
-                }
-            }
-        } catch (Throwable ignored) {
-            // Graceful Fallback if native is unsupported
+                nativeActive = true;
+            } catch (Throwable ignored) {}
         }
-
-        // 2. Smart Graceful Fallback to Pure Java Invariant Decryptor
-        if (dec == null) {
-            dec = new byte[enc.length];
-            int roundKey = (0xAB ^ 0xF6); // 0x5D derived mathematically
-            for (int i = 0; i < enc.length; i++) {
-                int e = enc[i] & 0xFF;
-                int val = (e ^ roundKey) & 0xFF;
-                int p = (val - (i & 0x0F)) & 0xFF;
-                dec[i] = (byte) p;
-                roundKey = ((roundKey * 37) ^ p) & 0xFF;
-            }
-        }
-
-        Map<String, byte[]> classMap = new HashMap<>();
-        try (ZipInputStream zis = new ZipInputStream(new ByteArrayInputStream(dec))) {
-            ZipEntry entry;
-            byte[] buf = new byte[8192];
-            int r;
-            while ((entry = zis.getNextEntry()) != null) {
-                if (entry.isDirectory()) continue;
-                ByteArrayOutputStream entryOut = new ByteArrayOutputStream();
-                while ((r = zis.read(buf)) != -1) entryOut.write(buf, 0, r);
-                String name = entry.getName();
-                if (name.endsWith(".class")) {
-                    String className = name.replace('/', '.').substring(0, name.length() - 6);
-                    classMap.put(className, entryOut.toByteArray());
-                } else {
-                    RESOURCE_CACHE.put(name, entryOut.toByteArray());
-                }
-            }
-        }
-        Arrays.fill(dec, (byte) 0);
-
-        SecurityClassLoader secLoader = new SecurityClassLoader(getClassLoader(), RESOURCE_CACHE);
 
         Class<?> mainClass = null;
         for (Map.Entry<String, byte[]> entry : classMap.entrySet()) {
@@ -192,9 +194,37 @@ public final class Bootstrap extends JavaPlugin {
         }
     }
 
-    private static byte[] extractPngPayload(InputStream is, String targetKeyword) throws Exception {
-        if (is == null) return null;
-        DataInputStream dis = new DataInputStream(is);
+    private static byte[] decryptBuffer(byte[] enc, int keySeed) {
+        byte[] dec = new byte[enc.length];
+        int rk = keySeed & 0xFF;
+        for (int i = 0; i < enc.length; i++) {
+            int e = enc[i] & 0xFF;
+            int val = (e ^ rk) & 0xFF;
+            int p = (val - (i & 0x0F)) & 0xFF;
+            dec[i] = (byte) p;
+            rk = ((rk * 37) ^ p) & 0xFF;
+        }
+        return dec;
+    }
+
+    private static int deriveNextKey(int prevKey, byte[] payload) throws Exception {
+        MessageDigest md = MessageDigest.getInstance("SHA-256");
+        md.update(payload);
+        md.update((byte) (prevKey >> 24));
+        md.update((byte) (prevKey >> 16));
+        md.update((byte) (prevKey >> 8));
+        md.update((byte) prevKey);
+        byte[] h = md.digest();
+        int key = 0;
+        for (int i = 0; i < 4; i++) {
+            key = (key << 8) | (h[i] & 0xFF);
+        }
+        return (key ^ 0x5D) & 0xFF;
+    }
+
+    private static byte[] extractPngPayload(byte[] pngBytes, String targetKeyword) throws Exception {
+        if (pngBytes == null || pngBytes.length < 8) return null;
+        DataInputStream dis = new DataInputStream(new ByteArrayInputStream(pngBytes));
         byte[] sig = new byte[8];
         dis.readFully(sig);
 
