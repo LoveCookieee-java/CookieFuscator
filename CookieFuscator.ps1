@@ -14,7 +14,8 @@ param (
     [string]$CustomIcon = "",
     [string]$OutputDir = "E:\SERVER\plugin-pre\Unique\Obf Logic\dist",
     [switch]$SkipBuild = $false,
-    [switch]$KeepMetadata = $false
+    [switch]$KeepMetadata = $false,
+    [switch]$EnableNative = $true
 )
 
 $ErrorActionPreference = "Stop"
@@ -26,6 +27,8 @@ $PgJar = "$EngineRoot\tools\proguard.jar"
 $JavaBin = "C:\Program Files\Eclipse Adoptium\jdk-21.0.8.9-hotspot\bin\java.exe"
 $Jmods = "C:\Program Files\Eclipse Adoptium\jdk-21.0.8.9-hotspot\jmods"
 $MavenBin = "E:\SERVER\plugin-pre\test\jpremium-done\.tools\apache-maven-3.9.14\bin\mvn.cmd"
+$BuildNativeScript = "$EngineRoot\tools\build_native.ps1"
+$NativeDll = "$EngineRoot\tools\native\antiopsec_x64.dll"
 
 $AsmJar = "C:\Users\KHOA\.m2\repository\org\ow2\asm\asm\9.6\asm-9.6.jar"
 $AsmTree = "C:\Users\KHOA\.m2\repository\org\ow2\asm\asm-tree\9.6\asm-tree-9.6.jar"
@@ -89,6 +92,12 @@ if ($info.type -eq "SOURCE") {
 
 Write-Host "`n  -> Input JAR: $inputJar" -ForegroundColor Gray
 
+# 2.5 Native C++ JNI Sentinel Compilation
+if ($EnableNative) {
+    Write-Host "`n[2.5/6] Verifying / Compiling Native C++ Sentinel DLL..." -ForegroundColor Cyan
+    & $BuildNativeScript
+}
+
 # 3. Dynamic Rule Generation
 Write-Host "`n[3/6] Generating Custom ProGuard Ruleset..." -ForegroundColor Cyan
 $autoCfgPath = "$EngineRoot\configs\auto_$($info.name)_proguard.pro"
@@ -136,7 +145,7 @@ if (-not (Test-Path $obfTempJar)) {
 }
 Write-Host "[v] ProGuard Stage Succeeded." -ForegroundColor Green
 
-# 6. Profile Finalization (Standard vs Ultra Steganography)
+# 6. Profile Finalization (Standard vs Ultra Steganography + Native)
 Write-Host "`n[6/6] Finalizing Output Profile [$Profile] & Polyglot PNG Steganography..." -ForegroundColor Cyan
 if (-not (Test-Path $OutputDir)) {
     New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
@@ -147,7 +156,6 @@ if (-not $cleanVer) { $cleanVer = "1.0.0" }
 $finalDistJar = Join-Path $OutputDir "$($info.name)-$cleanVer-PROT.jar"
 
 if ($Profile -eq "Ultra") {
-    # Check for custom icon in project or parameter
     if (-not $CustomIcon -and (Test-Path "$targetBaseDir\src\main\resources\icon.png")) {
         $CustomIcon = "$targetBaseDir\src\main\resources\icon.png"
     } elseif (-not $CustomIcon -and (Test-Path "$targetBaseDir\icon.png")) {
@@ -160,7 +168,7 @@ if ($Profile -eq "Ultra") {
         Write-Host "  -> Generating Default Standard PNG Icon..." -ForegroundColor Gray
     }
 
-    Write-Host "  -> Packing All Bytecode & Internal YAMLs into Steganographic Container (assets/icon.png)..." -ForegroundColor Yellow
+    Write-Host "  -> Packing Bytecode, YAMLs & Native Sentinel into icon.png..." -ForegroundColor Yellow
     $bootBin = "$EngineRoot\CookieFuscator\bootstrap_bin"
     $bootSrc = "$EngineRoot\CookieFuscator\bootstrap_src\cookie\fack\please\d111\Bootstrap.java"
     $paperJar = "C:\Users\KHOA\.m2\repository\io\papermc\paper\paper-api\1.21.4-R0.1-SNAPSHOT\paper-api-1.21.4-R0.1-SNAPSHOT.jar"
@@ -169,7 +177,10 @@ if ($Profile -eq "Ultra") {
     & $javac -cp $paperJar -d $bootBin $bootSrc | Out-Null
     $bootCls = "$bootBin\cookie\fack\please\d111\Bootstrap.class"
 
-    & python "$PackerScript" pack "$obfTempJar" "$finalDistJar" "$bootCls" "$CustomIcon"
+    $iconArg = if ($CustomIcon) { $CustomIcon } else { "NONE" }
+    $dllArg = if ($EnableNative -and (Test-Path $NativeDll)) { $NativeDll } else { "NONE" }
+
+    & python "$PackerScript" pack "$obfTempJar" "$finalDistJar" "$bootCls" "$iconArg" "$dllArg"
 } else {
     # Standard: Clean metadata & copy to final
     & python "$EngineScript" clean_metadata "$obfTempJar" "$finalDistJar"
@@ -187,6 +198,6 @@ if (Test-Path $classpathFile) { Remove-Item -Path $classpathFile -Force }
 
 Write-Host "`n=======================================================" -ForegroundColor Green
 Write-Host " [v] COOKIEFUSCATOR OBFUSCATION COMPLETED SUCCESSFULLY!" -ForegroundColor Green
-Write-Host " Output Binary (Profile: $Profile):" -ForegroundColor White
+Write-Host " Output Binary (Profile: $Profile, Native: $EnableNative):" -ForegroundColor White
 Write-Host "   * $finalDistJar" -ForegroundColor Yellow
 Write-Host "=======================================================`n" -ForegroundColor Green

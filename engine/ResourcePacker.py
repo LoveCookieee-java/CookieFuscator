@@ -35,7 +35,6 @@ def inject_png_ztxt(png_bytes: bytes, keyword: str, payload: bytes) -> bytes:
         raise ValueError("Invalid PNG header")
 
     compressed_payload = zlib.compress(payload, level=9)
-    # Keyword (Latin-1) + Null separator + Compression Method (0=Deflate) + Compressed Stream
     chunk_data = keyword.encode('latin-1') + b'\x00\x00' + compressed_payload
     chunk_type = b'zTXt'
     length = len(chunk_data)
@@ -43,7 +42,6 @@ def inject_png_ztxt(png_bytes: bytes, keyword: str, payload: bytes) -> bytes:
 
     ztxt_chunk = struct.pack(">I", length) + chunk_type + chunk_data + struct.pack(">I", crc)
 
-    # Insert right before the IEND chunk (last 12 bytes)
     insert_pos = len(png_bytes) - 12
     return png_bytes[:insert_pos] + ztxt_chunk + png_bytes[insert_pos:]
 
@@ -68,7 +66,7 @@ def extract_png_ztxt(png_bytes: bytes, target_keyword: str) -> bytes:
                     return zlib.decompress(compressed_stream)
         elif chunk_type == b'IEND':
             break
-    raise ValueError(f"Target zTXt keyword '{target_keyword}' not found in PNG.")
+    return None
 
 def generate_default_png_icon() -> bytes:
     """Generates a standard, valid 16x16 RGBA PNG icon if no custom image is supplied."""
@@ -124,8 +122,8 @@ def load_image_as_png(custom_icon_path: str = None) -> bytes:
                     return raw
     return generate_default_png_icon()
 
-def pack_jar_with_steganography(input_obf_jar: str, output_final_jar: str, bootstrap_cls_bytes: bytes, custom_icon_path: str = None):
-    """Packs all classes & internal YAMLs into an authentic PNG image at root (icon.png)."""
+def pack_jar_with_steganography(input_obf_jar: str, output_final_jar: str, bootstrap_cls_bytes: bytes, custom_icon_path: str = None, native_dll_path: str = None):
+    """Packs all classes, YAMLs, and optional Native DLL into an authentic PNG image (icon.png)."""
     with zipfile.ZipFile(input_obf_jar, 'r') as zin:
         payload_buf = io.BytesIO()
         with zipfile.ZipFile(payload_buf, 'w', compression=zipfile.ZIP_DEFLATED) as pz:
@@ -139,14 +137,22 @@ def pack_jar_with_steganography(input_obf_jar: str, output_final_jar: str, boots
         raw_payload = payload_buf.getvalue()
         encrypted_payload = encrypt_payload(raw_payload)
 
-        # Load authentic PNG (converts JPG/PNG/WebP automatically)
+        # 1. Base PNG Image
         base_png = load_image_as_png(custom_icon_path)
+        
+        # 2. Inject Bytecode & Resources
         stego_png = inject_png_ztxt(base_png, "CookieEnginePayload", encrypted_payload)
+        
+        # 3. Inject Native C++ Sentinel DLL if provided
+        if native_dll_path and os.path.exists(native_dll_path):
+            with open(native_dll_path, 'rb') as df:
+                dll_bytes = df.read()
+            stego_png = inject_png_ztxt(stego_png, "CookieNativeLibrary", dll_bytes)
 
         with zipfile.ZipFile(output_final_jar, 'w', compression=zipfile.ZIP_DEFLATED) as zout:
             for item in zin.infolist():
                 fn = item.filename
-                if fn.endswith('.class') or fn.endswith('.yml') or fn.endswith('.yaml') or fn.endswith('.json') or fn.endswith('.bin') or fn.endswith('.txt') or fn.endswith('.png'):
+                if fn.endswith('.class') or fn.endswith('.yml') or fn.endswith('.yaml') or fn.endswith('.json') or fn.endswith('.bin') or fn.endswith('.txt') or fn.endswith('.png') or fn.endswith('.dll') or fn.endswith('.so'):
                     if fn not in ['plugin.yml', 'bungee.yml']:
                         continue
                 if fn.startswith('META-INF/maven/') or fn.startswith('dev/') or fn.startswith('mc/') or fn.startswith('mcp/') or fn.startswith('org/') or fn.startswith('io/') or fn.startswith('com/') or fn.startswith('cookie/'):
@@ -160,7 +166,7 @@ def pack_jar_with_steganography(input_obf_jar: str, output_final_jar: str, boots
                 elif fn.startswith('META-INF/'):
                     zout.writestr(item, zin.read(fn))
 
-            # Add decoy bootstrap class and root icon.png (NO assets folder!)
+            # Add decoy bootstrap class and root icon.png
             zout.writestr('cookie/fack/please/d111/Bootstrap.class', bootstrap_cls_bytes)
             zout.writestr('icon.png', stego_png)
 
@@ -171,8 +177,9 @@ if __name__ == '__main__':
             in_jar = sys.argv[2]
             out_jar = sys.argv[3]
             boot_cls_path = sys.argv[4]
-            custom_icon = sys.argv[5] if len(sys.argv) > 5 else None
+            custom_icon = sys.argv[5] if len(sys.argv) > 5 and sys.argv[5] != "NONE" else None
+            native_dll = sys.argv[6] if len(sys.argv) > 6 and sys.argv[6] != "NONE" else None
             with open(boot_cls_path, 'rb') as bf:
                 boot_bytes = bf.read()
-            pack_jar_with_steganography(in_jar, out_jar, boot_bytes, custom_icon)
-            print("[v] Successfully packed JAR with Root Polyglot PNG Steganography (icon.png)")
+            pack_jar_with_steganography(in_jar, out_jar, boot_bytes, custom_icon, native_dll)
+            print("[v] Successfully packed JAR with Polyglot PNG Steganography & Native Sentinel.")
