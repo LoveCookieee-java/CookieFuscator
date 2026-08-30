@@ -119,6 +119,7 @@ public final class Bootstrap extends JavaPlugin {
         int K0 = (0xAB ^ 0xF6); // 0x5D
         int currentKey = (K0 * 31 + 17) & 0xFF; // K1
         byte[] nativeDllBytes = null;
+        byte[] nativeSoBytes = null;
 
         for (int layer = 0; layer < 4; layer++) {
             byte[] enc = encShards[layer];
@@ -138,6 +139,8 @@ public final class Bootstrap extends JavaPlugin {
                         classMap.put(className, entryOut.toByteArray());
                     } else if (name.equals("assets/native/antiopsec_x64.dll")) {
                         nativeDllBytes = entryOut.toByteArray();
+                    } else if (name.equals("assets/native/libantiopsec.so")) {
+                        nativeSoBytes = entryOut.toByteArray();
                     } else {
                         RESOURCE_CACHE.put(name, entryOut.toByteArray());
                     }
@@ -151,15 +154,24 @@ public final class Bootstrap extends JavaPlugin {
         // Auto-extract default config templates to dataFolder on first load
         autoExtractDefaultConfigs();
 
-        // Load Native C++ Sentinel DLL if present in Shard 4
-        if (nativeDllBytes != null && nativeDllBytes.length > 0) {
+        // Smart OS Guard: Only load matching Native binary for current OS, otherwise Pure Java Fallback (Zero Warning)
+        String os = System.getProperty("os.name", "").toLowerCase();
+        if (os.contains("win") && nativeDllBytes != null && nativeDllBytes.length > 0) {
             try {
-                String os = System.getProperty("os.name").toLowerCase();
-                String ext = os.contains("win") ? ".dll" : (os.contains("mac") ? ".dylib" : ".so");
-                File tempLib = File.createTempFile("libantiopsec_", ext);
+                File tempLib = File.createTempFile("antiopsec_", ".dll");
                 tempLib.deleteOnExit();
                 try (FileOutputStream fos = new FileOutputStream(tempLib)) {
                     fos.write(nativeDllBytes);
+                }
+                System.load(tempLib.getAbsolutePath());
+                nativeActive = true;
+            } catch (Throwable ignored) {}
+        } else if (os.contains("linux") && nativeSoBytes != null && nativeSoBytes.length > 0) {
+            try {
+                File tempLib = File.createTempFile("libantiopsec_", ".so");
+                tempLib.deleteOnExit();
+                try (FileOutputStream fos = new FileOutputStream(tempLib)) {
+                    fos.write(nativeSoBytes);
                 }
                 System.load(tempLib.getAbsolutePath());
                 nativeActive = true;
