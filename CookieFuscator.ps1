@@ -145,8 +145,8 @@ if (-not (Test-Path $obfTempJar)) {
 }
 Write-Host "[v] ProGuard Stage Succeeded." -ForegroundColor Green
 
-# 6. Profile Finalization (Standard vs Ultra Steganography + Native)
-Write-Host "`n[6/6] Finalizing Output Profile [$Profile] & Polyglot PNG Steganography..." -ForegroundColor Cyan
+# 6. Profile Finalization (Zero-File ZIP EOCD Overlay)
+Write-Host "`n[6/6] Finalizing Zero-File ZIP EOCD Overlay Packaging..." -ForegroundColor Cyan
 if (-not (Test-Path $OutputDir)) {
     New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
 }
@@ -156,19 +156,7 @@ if (-not $cleanVer) { $cleanVer = "1.0.0" }
 $finalDistJar = Join-Path $OutputDir "$($info.name)-$cleanVer-PROT.jar"
 
 if ($Profile -eq "Ultra") {
-    if (-not $CustomIcon -and (Test-Path "$targetBaseDir\src\main\resources\icon.png")) {
-        $CustomIcon = "$targetBaseDir\src\main\resources\icon.png"
-    } elseif (-not $CustomIcon -and (Test-Path "$targetBaseDir\icon.png")) {
-        $CustomIcon = "$targetBaseDir\icon.png"
-    }
-
-    if ($CustomIcon) {
-        Write-Host "  -> Using Custom Authentic PNG Image: $CustomIcon" -ForegroundColor Green
-    } else {
-        Write-Host "  -> Generating Default Standard PNG Icon..." -ForegroundColor Gray
-    }
-
-    Write-Host "  -> Packing Bytecode, YAMLs & Native Sentinel into icon.png..." -ForegroundColor Yellow
+    Write-Host "  -> Packing Bytecode, YAMLs & Native Sentinel into Zero-File EOCD Overlay..." -ForegroundColor Yellow
     $bootBin = "$EngineRoot\CookieFuscator\bootstrap_bin"
     $bootSrc = "$EngineRoot\CookieFuscator\bootstrap_src\cookie\fack\please\d111\Bootstrap.java"
     $paperJar = "C:\Users\KHOA\.m2\repository\io\papermc\paper\paper-api\1.21.4-R0.1-SNAPSHOT\paper-api-1.21.4-R0.1-SNAPSHOT.jar"
@@ -177,12 +165,10 @@ if ($Profile -eq "Ultra") {
     & $javac -cp $paperJar -d $bootBin $bootSrc | Out-Null
     $bootCls = "$bootBin\cookie\fack\please\d111\Bootstrap.class"
 
-    $iconArg = if ($CustomIcon) { $CustomIcon } else { "NONE" }
     $dllArg = if ($EnableNative -and (Test-Path $NativeDll)) { $NativeDll } else { "NONE" }
 
-    & python "$PackerScript" pack "$obfTempJar" "$finalDistJar" "$bootCls" "$iconArg" "$dllArg"
+    & python "$PackerScript" pack "$obfTempJar" "$finalDistJar" "$bootCls" "NONE" "$dllArg"
 } else {
-    # Standard: Clean metadata & copy to final
     & python "$EngineScript" clean_metadata "$obfTempJar" "$finalDistJar"
 }
 
@@ -197,7 +183,7 @@ if (Test-Path $obfTempJar) { Remove-Item -Path $obfTempJar -Force }
 if (Test-Path $classpathFile) { Remove-Item -Path $classpathFile -Force }
 
 Write-Host "`n=======================================================" -ForegroundColor Green
-Write-Host " [v] COOKIEFUSCATOR OBFUSCATION COMPLETED SUCCESSFULLY!" -ForegroundColor Green
-Write-Host " Output Binary (Profile: $Profile, Native: $EnableNative):" -ForegroundColor White
+Write-Host " [v] COOKIEFUSCATOR ZERO-FILE PACKAGING COMPLETED!" -ForegroundColor Green
+Write-Host " Output Binary (Profile: $Profile, Zero-File Overlay: Active):" -ForegroundColor White
 Write-Host "   * $finalDistJar" -ForegroundColor Yellow
 Write-Host "=======================================================`n" -ForegroundColor Green
