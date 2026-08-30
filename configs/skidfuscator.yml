@@ -1,0 +1,28 @@
+# ===================================================================
+# HARDENED SKIDFUSCATOR CONFIGURATION (PAPER 1.21.4)
+# ===================================================================
+
+control_flow:
+  enabled: true
+  type: STANDARD
+  strength: AGGRESSIVE
+  opaque_predicates: true           # Chèn các biểu thức toán học bất khả quy nạp
+
+string_encryption:
+  enabled: true
+  type: DYNAMIC                     # Mã hóa động chuỗi với key sinh ngẫu nhiên ở runtime
+
+invokedynamic:
+  enabled: true
+  type: POLYMORPHIC                 # Chuyển đổi toàn bộ call site sang invokedynamic bootstrap
+
+references:
+  enabled: true                     # Proxy toàn bộ field/method reference
+
+exemptions:
+  - 'dev/khoa/plugin/antiopsec/AntiOpsec'
+  - 'dev/khoa/plugin/antiopsec/native/**'
+  - 'dev/khoa/plugin/antiopsec/libs/**'
+  - 'com/github/retrooper/packetevents/**'
+  - 'org/bukkit/**'
+  - 'io/papermc/**'

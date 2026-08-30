@@ -1,0 +1,25 @@
+# Compiled / Temporary Output Files
+dist/*.jar
+!dist/.gitkeep
+target/
+*.tmp
+temp_*
+*.log
+
+# IDE & Editor Files
+.idea/
+*.iml
+.vscode/
+*.suo
+*.user
+
+# Python Cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Native Build Artifacts
+native_core/build/
+native_core/bin/*.obj
+native_core/bin/*.lib
+native_core/bin/*.exp

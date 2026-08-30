@@ -1,0 +1,42 @@
+# ===================================================================
+# COOKIEFUSCATOR ENTERPRISE MASTER CONFIGURATION
+# Unifying: ProGuard + Skidfuscator + ZKM Control Flow + Native Shield
+# ===================================================================
+
+target:
+  platform: 'PAPER_1_21'
+  java_version: 21
+
+name_obfuscation:
+  enabled: true
+  mode: 'OVERLOAD_AGGRESSIVE' # Ép đặt trùng tên method/field khác kiểu dữ liệu
+  root_package: 'cookie.fack.please.d111' # Xóa sổ 100% dev/khoa/plugin
+  dictionary_size: 31394 # 31k Troll & Optical Tokens (cookie, fack, please, d111)
+
+zkm_control_flow:
+  enabled: true
+  exception_flow_hijacking: true # Bẫy luồng code bằng synthetic try-catch / athrow (ZKM Signature)
+  opaque_math_invariants: true   # Biểu thức toán học bất biến (x*(x+1)%2==0)
+  switch_flattening: true        # Biến đổi tuần tự thành đồ thị phẳng switch-case
+
+string_encryption:
+  enabled: true
+  algorithm: 'DYNAMIC_POLYALPHABETIC' # Mã hóa động với key sinh ngẫu nhiên ở runtime
+
+resource_encryption:
+  enabled: true
+  target_extensions: ['.yml', '.yaml']
+  output_format: 'assets/{name}.bin' # Mã hóa toàn bộ YAML chữ ký thành file nhị phân
+  zeroize_in_ram: true
+
+native_shield:
+  enabled: true
+  anti_debug_hardware: true # Quét thanh ghi Dr0-Dr3
+  anti_debug_peb: true      # Quét trực tiếp PEB BeingDebugged / NtGlobalFlag
+  ram_section_checksum: true # Tự tính hash .text trong RAM chống byte-patch
+  dynamic_jni_registry: true # JNI_OnLoad RegisterNatives (Ẩn symbols khỏi IDA Pro)
+
+sentinel_runtime:
+  anti_javaagent: true      # Chặn -javaagent, -agentlib, -Xdebug lúc bật
+  anti_late_attach: true    # Quét chu kỳ 3s dập tắt Attach Listener / ByteBuddy
+  caller_stack_walker: true # Java 21 StackWalker chặn Reflection từ plugin lạ
