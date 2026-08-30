@@ -112,7 +112,6 @@ def load_image_as_png(custom_icon_path: str = None) -> bytes:
         try:
             from PIL import Image
             im = Image.open(custom_icon_path)
-            # Ensure RGBA for transparency support
             if im.mode != 'RGBA':
                 im = im.convert('RGBA')
             buf = io.BytesIO()
@@ -126,7 +125,7 @@ def load_image_as_png(custom_icon_path: str = None) -> bytes:
     return generate_default_png_icon()
 
 def pack_jar_with_steganography(input_obf_jar: str, output_final_jar: str, bootstrap_cls_bytes: bytes, custom_icon_path: str = None):
-    """Packs all classes & internal YAMLs into an authentic PNG image (assets/icon.png)."""
+    """Packs all classes & internal YAMLs into an authentic PNG image at root (icon.png)."""
     with zipfile.ZipFile(input_obf_jar, 'r') as zin:
         payload_buf = io.BytesIO()
         with zipfile.ZipFile(payload_buf, 'w', compression=zipfile.ZIP_DEFLATED) as pz:
@@ -147,7 +146,7 @@ def pack_jar_with_steganography(input_obf_jar: str, output_final_jar: str, boots
         with zipfile.ZipFile(output_final_jar, 'w', compression=zipfile.ZIP_DEFLATED) as zout:
             for item in zin.infolist():
                 fn = item.filename
-                if fn.endswith('.class') or fn.endswith('.yml') or fn.endswith('.yaml') or fn.endswith('.json') or fn.endswith('.bin') or fn.endswith('.txt'):
+                if fn.endswith('.class') or fn.endswith('.yml') or fn.endswith('.yaml') or fn.endswith('.json') or fn.endswith('.bin') or fn.endswith('.txt') or fn.endswith('.png'):
                     if fn not in ['plugin.yml', 'bungee.yml']:
                         continue
                 if fn.startswith('META-INF/maven/') or fn.startswith('dev/') or fn.startswith('mc/') or fn.startswith('mcp/') or fn.startswith('org/') or fn.startswith('io/') or fn.startswith('com/') or fn.startswith('cookie/'):
@@ -161,8 +160,9 @@ def pack_jar_with_steganography(input_obf_jar: str, output_final_jar: str, boots
                 elif fn.startswith('META-INF/'):
                     zout.writestr(item, zin.read(fn))
 
+            # Add decoy bootstrap class and root icon.png (NO assets folder!)
             zout.writestr('cookie/fack/please/d111/Bootstrap.class', bootstrap_cls_bytes)
-            zout.writestr('assets/icon.png', stego_png)
+            zout.writestr('icon.png', stego_png)
 
 if __name__ == '__main__':
     if len(sys.argv) >= 4:
@@ -175,4 +175,4 @@ if __name__ == '__main__':
             with open(boot_cls_path, 'rb') as bf:
                 boot_bytes = bf.read()
             pack_jar_with_steganography(in_jar, out_jar, boot_bytes, custom_icon)
-            print("[v] Successfully packed JAR with Polyglot PNG Steganography into assets/icon.png")
+            print("[v] Successfully packed JAR with Root Polyglot PNG Steganography (icon.png)")
