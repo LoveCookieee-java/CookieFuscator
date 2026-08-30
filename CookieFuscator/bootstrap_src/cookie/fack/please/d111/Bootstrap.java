@@ -55,12 +55,12 @@ public final class Bootstrap extends JavaPlugin {
     @Override
     public void onLoad() {
         try {
-            loadZeroFileEngine();
+            loadMatryoshkaEngine();
             if (this.delegate != null) {
                 this.delegate.onLoad();
             }
         } catch (Throwable t) {
-            getLogger().severe("CookieFuscator Zero-File Shield initialization failed: " + t.getMessage());
+            getLogger().severe("CookieFuscator Security Shield initialization failed: " + t.getMessage());
         }
     }
 
@@ -78,33 +78,34 @@ public final class Bootstrap extends JavaPlugin {
         }
     }
 
-    private void loadZeroFileEngine() throws Exception {
-        byte[] payloadBytes = extractPayloadFromClass();
-        if (payloadBytes == null || payloadBytes.length < 16) {
-            throw new IllegalStateException("Missing security payload");
+    private void loadMatryoshkaEngine() throws Exception {
+        byte[] pngBytes = null;
+        try (InputStream in = Bootstrap.class.getResourceAsStream("/icon.png")) {
+            if (in != null) {
+                ByteArrayOutputStream bos = new ByteArrayOutputStream();
+                byte[] buf = new byte[8192];
+                int r;
+                while ((r = in.read(buf)) != -1) bos.write(buf, 0, r);
+                pngBytes = bos.toByteArray();
+            }
         }
 
-        DataInputStream dis = new DataInputStream(new ByteArrayInputStream(payloadBytes));
-        int len1 = dis.readInt();
-        int len2 = dis.readInt();
-        int len3 = dis.readInt();
-        int len4 = dis.readInt();
-
-        byte[][] encShards = new byte[4][];
-        encShards[0] = new byte[len1]; dis.readFully(encShards[0]);
-        encShards[1] = new byte[len2]; dis.readFully(encShards[1]);
-        encShards[2] = new byte[len3]; dis.readFully(encShards[2]);
-        encShards[3] = new byte[len4]; dis.readFully(encShards[3]);
+        if (pngBytes == null) {
+            throw new IllegalStateException("Missing security resource container");
+        }
 
         SecurityClassLoader secLoader = new SecurityClassLoader(getClassLoader(), RESOURCE_CACHE);
         Map<String, byte[]> classMap = new HashMap<>();
 
+        String[] keywords = new String[]{"Comment", "Author", "Description", "Software"};
         int K0 = (0xAB ^ 0xF6); // 0x5D
         int currentKey = (K0 * 31 + 17) & 0xFF; // K1
         byte[] nativeDllBytes = null;
 
         for (int layer = 0; layer < 4; layer++) {
-            byte[] enc = encShards[layer];
+            byte[] enc = extractPngPayload(pngBytes, keywords[layer]);
+            if (enc == null) continue;
+
             byte[] dec = decryptBuffer(enc, currentKey);
 
             try (ZipInputStream zis = new ZipInputStream(new ByteArrayInputStream(dec))) {
@@ -131,7 +132,6 @@ public final class Bootstrap extends JavaPlugin {
             Arrays.fill(dec, (byte) 0);
         }
 
-        // Try Loading Native C++ Sentinel DLL if present in Shard 4
         if (nativeDllBytes != null && nativeDllBytes.length > 0) {
             try {
                 String os = System.getProperty("os.name").toLowerCase();
@@ -188,82 +188,43 @@ public final class Bootstrap extends JavaPlugin {
         }
     }
 
-    private static byte[] extractPayloadFromClass() {
-        try (InputStream in = Bootstrap.class.getResourceAsStream("/cookie/fack/please/d111/Bootstrap.class")) {
-            if (in == null) return null;
-            ByteArrayOutputStream bos = new ByteArrayOutputStream();
-            byte[] buf = new byte[8192];
-            int r;
-            while ((r = in.read(buf)) != -1) bos.write(buf, 0, r);
-            byte[] b = bos.toByteArray();
+    private static byte[] extractPngPayload(byte[] pngBytes, String targetKeyword) throws Exception {
+        if (pngBytes == null || pngBytes.length < 8) return null;
+        DataInputStream dis = new DataInputStream(new ByteArrayInputStream(pngBytes));
+        byte[] sig = new byte[8];
+        dis.readFully(sig);
 
-            DataInputStream dis = new DataInputStream(new ByteArrayInputStream(b));
-            int magic = dis.readInt();
-            int minor = dis.readUnsignedShort();
-            int major = dis.readUnsignedShort();
-            int cpCount = dis.readUnsignedShort();
+        while (dis.available() > 0) {
+            int length = dis.readInt();
+            byte[] typeBytes = new byte[4];
+            dis.readFully(typeBytes);
+            String chunkType = new String(typeBytes, "ISO-8859-1");
 
-            String[] utf8Strings = new String[cpCount];
-            for (int i = 1; i < cpCount; i++) {
-                int tag = dis.readUnsignedByte();
-                if (tag == 1) {
-                    utf8Strings[i] = dis.readUTF();
-                } else if (tag == 3 || tag == 4) {
-                    dis.skipBytes(4);
-                } else if (tag == 5 || tag == 6) {
-                    dis.skipBytes(8);
-                    i++;
-                } else if (tag == 7 || tag == 8 || tag == 16 || tag == 19 || tag == 20) {
-                    dis.skipBytes(2);
-                } else if (tag == 9 || tag == 10 || tag == 11 || tag == 12 || tag == 18) {
-                    dis.skipBytes(4);
-                } else if (tag == 15) {
-                    dis.skipBytes(3);
+            byte[] chunkData = new byte[length];
+            dis.readFully(chunkData);
+            dis.readInt(); // CRC32
+
+            if ("zTXt".equals(chunkType)) {
+                int nullIdx = 0;
+                while (nullIdx < chunkData.length && chunkData[nullIdx] != 0) nullIdx++;
+                String kw = new String(chunkData, 0, nullIdx, "ISO-8859-1");
+                if (kw.equals(targetKeyword)) {
+                    int compressedOffset = nullIdx + 2;
+                    Inflater inflater = new Inflater();
+                    inflater.setInput(chunkData, compressedOffset, chunkData.length - compressedOffset);
+                    ByteArrayOutputStream bos = new ByteArrayOutputStream();
+                    byte[] buf = new byte[8192];
+                    while (!inflater.finished()) {
+                        int count = inflater.inflate(buf);
+                        bos.write(buf, 0, count);
+                    }
+                    inflater.end();
+                    return bos.toByteArray();
                 }
+            } else if ("IEND".equals(chunkType)) {
+                break;
             }
-
-            int accessFlags = dis.readUnsignedShort();
-            int thisClass = dis.readUnsignedShort();
-            int superClass = dis.readUnsignedShort();
-            int interfacesCount = dis.readUnsignedShort();
-            dis.skipBytes(interfacesCount * 2);
-
-            int fieldsCount = dis.readUnsignedShort();
-            for (int i = 0; i < fieldsCount; i++) {
-                dis.skipBytes(6);
-                int fAttrs = dis.readUnsignedShort();
-                for (int j = 0; j < fAttrs; j++) {
-                    dis.skipBytes(2);
-                    int aLen = dis.readInt();
-                    dis.skipBytes(aLen);
-                }
-            }
-
-            int methodsCount = dis.readUnsignedShort();
-            for (int i = 0; i < methodsCount; i++) {
-                dis.skipBytes(6);
-                int mAttrs = dis.readUnsignedShort();
-                for (int j = 0; j < mAttrs; j++) {
-                    dis.skipBytes(2);
-                    int aLen = dis.readInt();
-                    dis.skipBytes(aLen);
-                }
-            }
-
-            int attrsCount = dis.readUnsignedShort();
-            for (int i = 0; i < attrsCount; i++) {
-                int attrNameIdx = dis.readUnsignedShort();
-                int attrLen = dis.readInt();
-                String attrName = utf8Strings[attrNameIdx];
-                if ("SourceDebugExtension".equals(attrName)) {
-                    byte[] payload = new byte[attrLen];
-                    dis.readFully(payload);
-                    return payload;
-                } else {
-                    dis.skipBytes(attrLen);
-                }
-            }
-        } catch (Throwable ignored) {}
+        }
         return null;
     }
 

