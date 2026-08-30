@@ -124,7 +124,7 @@ if (-not (Test-Path $obfTempJar)) {
 Write-Host "[v] ProGuard Stage Succeeded." -ForegroundColor Green
 
 # 5. Profile Finalization (Standard vs Ultra)
-Write-Host "`n[5/5] Finalizing Output Profile [$Profile] & Cleaning Metadata..." -ForegroundColor Cyan
+Write-Host "`n[5/5] Finalizing Output Profile [$Profile] & Encrypting Internal Resources..." -ForegroundColor Cyan
 if (-not (Test-Path $OutputDir)) {
     New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
 }
@@ -134,8 +134,8 @@ if (-not $cleanVer) { $cleanVer = "1.0.0" }
 $finalDistJar = Join-Path $OutputDir "$($info.name)-$cleanVer-PROT.jar"
 
 if ($Profile -eq "Ultra") {
-    # Decoy Stub Injection (Pack all classes into assets/engine.dat)
-    Write-Host "  -> Encrypting Bytecode into assets/engine.dat Decoy Container..." -ForegroundColor Yellow
+    # Decoy Stub Injection (Pack all classes AND all internal YAMLs/resources into assets/engine.dat)
+    Write-Host "  -> Encrypting Bytecode & All Internal YAML Resources into assets/engine.dat..." -ForegroundColor Yellow
     $bootBin = "$EngineRoot\CookieFuscator\bootstrap_bin"
     $bootSrc = "$EngineRoot\CookieFuscator\bootstrap_src\cookie\fack\please\d111\Bootstrap.java"
     $paperJar = "C:\Users\KHOA\.m2\repository\io\papermc\paper\paper-api\1.21.4-R0.1-SNAPSHOT\paper-api-1.21.4-R0.1-SNAPSHOT.jar"
@@ -161,23 +161,37 @@ def enc(b):
 with open(boot_cls, 'rb') as bf: boot_bytes = bf.read()
 with zipfile.ZipFile(v2, 'r') as zin:
     names = zin.namelist()
-    all_classes = [f for f in names if f.endswith('.class')]
+    
+    # Everything except manifest and plugin.yml goes into encrypted engine.dat
     engine_buf = io.BytesIO()
     with zipfile.ZipFile(engine_buf, 'w', compression=zipfile.ZIP_DEFLATED) as ez:
-        for c in all_classes: ez.writestr(c, zin.read(c))
+        for item in zin.infolist():
+            fn = item.filename
+            if fn.startswith('META-INF/') or fn in ['plugin.yml', 'bungee.yml', 'velocity-plugin.json']:
+                continue
+            if not fn.endswith('/'):
+                ez.writestr(fn, zin.read(fn))
+                
     enc_engine = enc(engine_buf.getvalue())
+    
     with zipfile.ZipFile(final_jar, 'w', compression=zipfile.ZIP_DEFLATED) as zout:
         for item in zin.infolist():
             fn = item.filename
-            if fn.endswith('.class') or fn.startswith('META-INF/maven/') or fn.startswith('dev/') or fn.startswith('mc/') or fn.startswith('mcp/') or fn.startswith('org/') or fn.startswith('io/') or fn.startswith('com/'):
+            # Exclude all classes, all internal YAMLs/resources, and shaded directories
+            if fn.endswith('.class') or fn.endswith('.yml') or fn.endswith('.yaml') or fn.endswith('.json') or fn.endswith('.bin') or fn.endswith('.txt'):
+                if fn not in ['plugin.yml', 'bungee.yml']:
+                    continue
+            if fn.startswith('META-INF/maven/') or fn.startswith('dev/') or fn.startswith('mc/') or fn.startswith('mcp/') or fn.startswith('org/') or fn.startswith('io/') or fn.startswith('com/') or fn.startswith('cookie/'):
                 continue
+                
             if fn in ['plugin.yml', 'bungee.yml']:
                 p_text = zin.read(fn).decode('utf-8')
                 import re
                 new_p = re.sub(r'main:\s*.*', 'main: cookie.fack.please.d111.Bootstrap', p_text)
                 zout.writestr(item, new_p.encode('utf-8'))
-            else:
+            elif fn.startswith('META-INF/'):
                 zout.writestr(item, zin.read(fn))
+                
         zout.writestr('cookie/fack/please/d111/Bootstrap.class', boot_bytes)
         zout.writestr('assets/engine.dat', enc_engine)
 "

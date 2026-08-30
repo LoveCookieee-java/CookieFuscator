@@ -17,6 +17,44 @@ import java.util.zip.ZipInputStream;
 
 public final class Bootstrap extends JavaPlugin {
     private JavaPlugin delegate;
+    private static final Map<String, byte[]> RESOURCE_CACHE = new HashMap<>();
+
+    public static class SecurityClassLoader extends ClassLoader {
+        private final Map<String, byte[]> resources;
+
+        public SecurityClassLoader(ClassLoader parent, Map<String, byte[]> resources) {
+            super(parent);
+            this.resources = resources;
+        }
+
+        @Override
+        public InputStream getResourceAsStream(String name) {
+            if (name != null) {
+                String key = name.startsWith("/") ? name.substring(1) : name;
+                byte[] data = this.resources.get(key);
+                if (data != null) {
+                    return new ByteArrayInputStream(data);
+                }
+            }
+            return super.getResourceAsStream(name);
+        }
+
+        public Class<?> define(String name, byte[] b) {
+            return defineClass(name, b, 0, b.length);
+        }
+    }
+
+    @Override
+    public InputStream getResource(String filename) {
+        if (filename != null) {
+            String key = filename.startsWith("/") ? filename.substring(1) : filename;
+            byte[] data = RESOURCE_CACHE.get(key);
+            if (data != null) {
+                return new ByteArrayInputStream(data);
+            }
+        }
+        return super.getResource(filename);
+    }
 
     @Override
     public void onLoad() {
@@ -73,25 +111,27 @@ public final class Bootstrap extends JavaPlugin {
             byte[] buf = new byte[8192];
             int r;
             while ((entry = zis.getNextEntry()) != null) {
-                if (!entry.isDirectory() && entry.getName().endsWith(".class")) {
-                    ByteArrayOutputStream classOut = new ByteArrayOutputStream();
-                    while ((r = zis.read(buf)) != -1) classOut.write(buf, 0, r);
-                    String className = entry.getName().replace('/', '.').substring(0, entry.getName().length() - 6);
-                    classMap.put(className, classOut.toByteArray());
+                if (entry.isDirectory()) continue;
+                ByteArrayOutputStream entryOut = new ByteArrayOutputStream();
+                while ((r = zis.read(buf)) != -1) entryOut.write(buf, 0, r);
+                String name = entry.getName();
+                if (name.endsWith(".class")) {
+                    String className = name.replace('/', '.').substring(0, name.length() - 6);
+                    classMap.put(className, entryOut.toByteArray());
+                } else {
+                    RESOURCE_CACHE.put(name, entryOut.toByteArray());
                 }
             }
         }
         Arrays.fill(dec, (byte) 0);
 
-        Method defineMethod = ClassLoader.class.getDeclaredMethod("defineClass", String.class, byte[].class, int.class, int.class);
-        defineMethod.setAccessible(true);
-        ClassLoader loader = getClassLoader();
+        SecurityClassLoader secLoader = new SecurityClassLoader(getClassLoader(), RESOURCE_CACHE);
 
         Class<?> mainClass = null;
         for (Map.Entry<String, byte[]> entry : classMap.entrySet()) {
             byte[] classBytes = entry.getValue();
             try {
-                Class<?> c = (Class<?>) defineMethod.invoke(loader, entry.getKey(), classBytes, 0, classBytes.length);
+                Class<?> c = secLoader.define(entry.getKey(), classBytes);
                 if (JavaPlugin.class.isAssignableFrom(c) && !c.getName().equals(Bootstrap.class.getName())) {
                     mainClass = c;
                 }
@@ -100,7 +140,6 @@ public final class Bootstrap extends JavaPlugin {
 
         if (mainClass != null) {
             try {
-                // Try unsafe allocate first to inject Bukkit fields before constructors
                 Field theUnsafe = Class.forName("sun.misc.Unsafe").getDeclaredField("theUnsafe");
                 theUnsafe.setAccessible(true);
                 Object unsafeObj = theUnsafe.get(null);
@@ -123,9 +162,9 @@ public final class Bootstrap extends JavaPlugin {
             }
 
             try {
-                Constructor<?> ctor = mainClass.getDeclaredConstructor();
-                ctor.setAccessible(true);
-                ctor.newInstance();
+                Field clField = JavaPlugin.class.getDeclaredField("classLoader");
+                clField.setAccessible(true);
+                clField.set(this.delegate, secLoader);
             } catch (Throwable ignored) {}
         }
     }
