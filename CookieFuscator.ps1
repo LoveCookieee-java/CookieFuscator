@@ -11,7 +11,7 @@ param (
     [string]$Profile = "Ultra",
 
     [string]$Repackage = "cookie.fack.please.d111",
-    [string]$CustomIcon = "C:\Users\KHOA\Downloads\images.jpg",
+    [string]$CustomIcon = "",
     [string]$OutputDir = "E:\SERVER\plugin-pre\Unique\Obf Logic\dist",
     [switch]$SkipBuild = $false,
     [switch]$KeepMetadata = $false,
@@ -145,8 +145,8 @@ if (-not (Test-Path $obfTempJar)) {
 }
 Write-Host "[v] ProGuard Stage Succeeded." -ForegroundColor Green
 
-# 6. Profile Finalization (Matryoshka 4-Layer Steganography Container)
-Write-Host "`n[6/6] Finalizing 100% Valid Matryoshka Steganography & Native Packaging..." -ForegroundColor Cyan
+# 6. Profile Finalization (Zero-File Invisibility & Polyglot Header Prefix)
+Write-Host "`n[6/6] Finalizing Zero-File Polyglot Packaging..." -ForegroundColor Cyan
 if (-not (Test-Path $OutputDir)) {
     New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
 }
@@ -156,7 +156,7 @@ if (-not $cleanVer) { $cleanVer = "1.0.0" }
 $finalDistJar = Join-Path $OutputDir "$($info.name)-$cleanVer-PROT.jar"
 
 if ($Profile -eq "Ultra") {
-    Write-Host "  -> Packing Bytecode, YAMLs & Native Sentinel into 100% Valid icon.png..." -ForegroundColor Yellow
+    Write-Host "  -> Packing Bytecode, YAMLs & Native Sentinel into Zero-File Polyglot Binary..." -ForegroundColor Yellow
     $bootBin = "$EngineRoot\CookieFuscator\bootstrap_bin"
     $bootSrc = "$EngineRoot\CookieFuscator\bootstrap_src\cookie\fack\please\d111\Bootstrap.java"
     $paperJar = "C:\Users\KHOA\.m2\repository\io\papermc\paper\paper-api\1.21.4-R0.1-SNAPSHOT\paper-api-1.21.4-R0.1-SNAPSHOT.jar"
@@ -165,10 +165,9 @@ if ($Profile -eq "Ultra") {
     & $javac -cp $paperJar -d $bootBin $bootSrc | Out-Null
     $bootCls = "$bootBin\cookie\fack\please\d111\Bootstrap.class"
 
-    $iconArg = if ($CustomIcon -and (Test-Path $CustomIcon)) { $CustomIcon } else { "NONE" }
     $dllArg = if ($EnableNative -and (Test-Path $NativeDll)) { $NativeDll } else { "NONE" }
 
-    & python "$PackerScript" pack "$obfTempJar" "$finalDistJar" "$bootCls" "$iconArg" "$dllArg"
+    & python "$PackerScript" pack "$obfTempJar" "$finalDistJar" "$bootCls" "NONE" "$dllArg"
 } else {
     & python "$EngineScript" clean_metadata "$obfTempJar" "$finalDistJar"
 }
@@ -184,7 +183,7 @@ if (Test-Path $obfTempJar) { Remove-Item -Path $obfTempJar -Force }
 if (Test-Path $classpathFile) { Remove-Item -Path $classpathFile -Force }
 
 Write-Host "`n=======================================================" -ForegroundColor Green
-Write-Host " [v] COOKIEFUSCATOR PACKAGING COMPLETED!" -ForegroundColor Green
-Write-Host " Output Binary (Profile: $Profile, Matryoshka 4-Layer: Active):" -ForegroundColor White
+Write-Host " [v] COOKIEFUSCATOR ZERO-FILE PACKAGING COMPLETED!" -ForegroundColor Green
+Write-Host " Output Binary (Profile: $Profile, Zero-File Invisibility: Active):" -ForegroundColor White
 Write-Host "   * $finalDistJar" -ForegroundColor Yellow
 Write-Host "=======================================================`n" -ForegroundColor Green

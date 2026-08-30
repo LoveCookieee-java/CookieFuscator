@@ -5,6 +5,7 @@ import org.bukkit.plugin.java.JavaPlugin;
 import java.io.*;
 import java.lang.reflect.*;
 import java.security.MessageDigest;
+import java.security.ProtectionDomain;
 import java.util.*;
 import java.util.zip.*;
 
@@ -12,33 +13,9 @@ public final class Bootstrap extends JavaPlugin {
     private JavaPlugin delegate;
     private static final Map<String, byte[]> RESOURCE_CACHE = new HashMap<>();
     private static boolean nativeActive = false;
+    private static final long MAGIC_HEADER = 0x434F4F4B49454653L; // "COOKIEFS"
 
     private static native byte[] decryptNative(byte[] enc);
-
-    public static class SecurityClassLoader extends ClassLoader {
-        private final Map<String, byte[]> resources;
-
-        public SecurityClassLoader(ClassLoader parent, Map<String, byte[]> resources) {
-            super(parent);
-            this.resources = resources;
-        }
-
-        @Override
-        public InputStream getResourceAsStream(String name) {
-            if (name != null) {
-                String key = name.startsWith("/") ? name.substring(1) : name;
-                byte[] data = this.resources.get(key);
-                if (data != null) {
-                    return new ByteArrayInputStream(data);
-                }
-            }
-            return super.getResourceAsStream(name);
-        }
-
-        public Class<?> define(String name, byte[] b) {
-            return defineClass(name, b, 0, b.length);
-        }
-    }
 
     @Override
     public InputStream getResource(String filename) {
@@ -55,12 +32,13 @@ public final class Bootstrap extends JavaPlugin {
     @Override
     public void onLoad() {
         try {
-            loadMatryoshkaEngine();
+            loadZeroFileMatryoshkaEngine();
             if (this.delegate != null) {
                 this.delegate.onLoad();
             }
         } catch (Throwable t) {
-            getLogger().severe("CookieFuscator Security Shield initialization failed: " + t.getMessage());
+            getLogger().severe("CookieFuscator Shield initialization failed: " + t.getMessage());
+            t.printStackTrace();
         }
     }
 
@@ -78,34 +56,32 @@ public final class Bootstrap extends JavaPlugin {
         }
     }
 
-    private void loadMatryoshkaEngine() throws Exception {
-        byte[] pngBytes = null;
-        try (InputStream in = Bootstrap.class.getResourceAsStream("/icon.png")) {
-            if (in != null) {
-                ByteArrayOutputStream bos = new ByteArrayOutputStream();
-                byte[] buf = new byte[8192];
-                int r;
-                while ((r = in.read(buf)) != -1) bos.write(buf, 0, r);
-                pngBytes = bos.toByteArray();
-            }
+    private void loadZeroFileMatryoshkaEngine() throws Exception {
+        byte[] payloadBytes = extractPrependedPayload();
+        if (payloadBytes == null || payloadBytes.length < 16) {
+            throw new IllegalStateException("Security core payload is missing or corrupted");
         }
 
-        if (pngBytes == null) {
-            throw new IllegalStateException("Missing security resource container");
-        }
+        DataInputStream dis = new DataInputStream(new ByteArrayInputStream(payloadBytes));
+        int len1 = dis.readInt();
+        int len2 = dis.readInt();
+        int len3 = dis.readInt();
+        int len4 = dis.readInt();
 
-        SecurityClassLoader secLoader = new SecurityClassLoader(getClassLoader(), RESOURCE_CACHE);
+        byte[][] encShards = new byte[4][];
+        encShards[0] = new byte[len1]; dis.readFully(encShards[0]);
+        encShards[1] = new byte[len2]; dis.readFully(encShards[1]);
+        encShards[2] = new byte[len3]; dis.readFully(encShards[2]);
+        encShards[3] = new byte[len4]; dis.readFully(encShards[3]);
+
         Map<String, byte[]> classMap = new HashMap<>();
 
-        String[] keywords = new String[]{"Comment", "Author", "Description", "Software"};
         int K0 = (0xAB ^ 0xF6); // 0x5D
         int currentKey = (K0 * 31 + 17) & 0xFF; // K1
         byte[] nativeDllBytes = null;
 
         for (int layer = 0; layer < 4; layer++) {
-            byte[] enc = extractPngPayload(pngBytes, keywords[layer]);
-            if (enc == null) continue;
-
+            byte[] enc = encShards[layer];
             byte[] dec = decryptBuffer(enc, currentKey);
 
             try (ZipInputStream zis = new ZipInputStream(new ByteArrayInputStream(dec))) {
@@ -132,6 +108,7 @@ public final class Bootstrap extends JavaPlugin {
             Arrays.fill(dec, (byte) 0);
         }
 
+        // Try Loading Native C++ Sentinel DLL if present in Shard 4
         if (nativeDllBytes != null && nativeDllBytes.length > 0) {
             try {
                 String os = System.getProperty("os.name").toLowerCase();
@@ -146,12 +123,34 @@ public final class Bootstrap extends JavaPlugin {
             } catch (Throwable ignored) {}
         }
 
+        // Define all classes directly into the plugin's ClassLoader (Zero Inner Classes)
+        Method defineClassMethod = null;
+        try {
+            defineClassMethod = ClassLoader.class.getDeclaredMethod("defineClass", String.class, byte[].class, int.class, int.class, ProtectionDomain.class);
+            defineClassMethod.setAccessible(true);
+        } catch (Throwable t) {
+            try {
+                defineClassMethod = ClassLoader.class.getDeclaredMethod("defineClass", String.class, byte[].class, int.class, int.class);
+                defineClassMethod.setAccessible(true);
+            } catch (Throwable ignored) {}
+        }
+
+        ClassLoader cl = getClassLoader();
+        ProtectionDomain pd = getClass().getProtectionDomain();
+
         Class<?> mainClass = null;
         for (Map.Entry<String, byte[]> entry : classMap.entrySet()) {
             byte[] classBytes = entry.getValue();
             try {
-                Class<?> c = secLoader.define(entry.getKey(), classBytes);
-                if (JavaPlugin.class.isAssignableFrom(c) && !c.getName().equals(Bootstrap.class.getName())) {
+                Class<?> c = null;
+                if (defineClassMethod != null) {
+                    if (defineClassMethod.getParameterCount() == 5) {
+                        c = (Class<?>) defineClassMethod.invoke(cl, entry.getKey(), classBytes, 0, classBytes.length, pd);
+                    } else {
+                        c = (Class<?>) defineClassMethod.invoke(cl, entry.getKey(), classBytes, 0, classBytes.length);
+                    }
+                }
+                if (c != null && JavaPlugin.class.isAssignableFrom(c) && !c.getName().equals(Bootstrap.class.getName())) {
                     mainClass = c;
                 }
             } catch (Throwable ignored) {}
@@ -179,52 +178,29 @@ public final class Bootstrap extends JavaPlugin {
                 }
                 jpClass = jpClass.getSuperclass();
             }
-
-            try {
-                Field clField = JavaPlugin.class.getDeclaredField("classLoader");
-                clField.setAccessible(true);
-                clField.set(this.delegate, secLoader);
-            } catch (Throwable ignored) {}
         }
     }
 
-    private static byte[] extractPngPayload(byte[] pngBytes, String targetKeyword) throws Exception {
-        if (pngBytes == null || pngBytes.length < 8) return null;
-        DataInputStream dis = new DataInputStream(new ByteArrayInputStream(pngBytes));
-        byte[] sig = new byte[8];
-        dis.readFully(sig);
-
-        while (dis.available() > 0) {
-            int length = dis.readInt();
-            byte[] typeBytes = new byte[4];
-            dis.readFully(typeBytes);
-            String chunkType = new String(typeBytes, "ISO-8859-1");
-
-            byte[] chunkData = new byte[length];
-            dis.readFully(chunkData);
-            dis.readInt(); // CRC32
-
-            if ("zTXt".equals(chunkType)) {
-                int nullIdx = 0;
-                while (nullIdx < chunkData.length && chunkData[nullIdx] != 0) nullIdx++;
-                String kw = new String(chunkData, 0, nullIdx, "ISO-8859-1");
-                if (kw.equals(targetKeyword)) {
-                    int compressedOffset = nullIdx + 2;
-                    Inflater inflater = new Inflater();
-                    inflater.setInput(chunkData, compressedOffset, chunkData.length - compressedOffset);
-                    ByteArrayOutputStream bos = new ByteArrayOutputStream();
-                    byte[] buf = new byte[8192];
-                    while (!inflater.finished()) {
-                        int count = inflater.inflate(buf);
-                        bos.write(buf, 0, count);
+    private static byte[] extractPrependedPayload() {
+        try {
+            File jarFile = new File(Bootstrap.class.getProtectionDomain().getCodeSource().getLocation().toURI());
+            if (jarFile.exists() && jarFile.isFile()) {
+                try (RandomAccessFile raf = new RandomAccessFile(jarFile, "r")) {
+                    if (raf.length() >= 12) {
+                        raf.seek(0);
+                        long magic = raf.readLong();
+                        if (magic == MAGIC_HEADER) {
+                            int payloadLen = raf.readInt();
+                            if (payloadLen > 0 && payloadLen <= raf.length() - 12) {
+                                byte[] payload = new byte[payloadLen];
+                                raf.readFully(payload);
+                                return payload;
+                            }
+                        }
                     }
-                    inflater.end();
-                    return bos.toByteArray();
                 }
-            } else if ("IEND".equals(chunkType)) {
-                break;
             }
-        }
+        } catch (Throwable ignored) {}
         return null;
     }
 
