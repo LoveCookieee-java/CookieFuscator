@@ -11,6 +11,7 @@ param (
     [string]$Profile = "Ultra",
 
     [string]$Repackage = "cookie.fack.please.d111",
+    [string]$CustomIcon = "",
     [string]$OutputDir = "E:\SERVER\plugin-pre\Unique\Obf Logic\dist",
     [switch]$SkipBuild = $false,
     [switch]$KeepMetadata = $false
@@ -146,7 +147,19 @@ if (-not $cleanVer) { $cleanVer = "1.0.0" }
 $finalDistJar = Join-Path $OutputDir "$($info.name)-$cleanVer-PROT.jar"
 
 if ($Profile -eq "Ultra") {
-    # Decoy Stub Injection with Polyglot PNG Container (assets/icon.png zTXt chunk)
+    # Check for custom icon in project or parameter
+    if (-not $CustomIcon -and (Test-Path "$targetBaseDir\src\main\resources\icon.png")) {
+        $CustomIcon = "$targetBaseDir\src\main\resources\icon.png"
+    } elseif (-not $CustomIcon -and (Test-Path "$targetBaseDir\icon.png")) {
+        $CustomIcon = "$targetBaseDir\icon.png"
+    }
+
+    if ($CustomIcon) {
+        Write-Host "  -> Using Custom Authentic PNG Image: $CustomIcon" -ForegroundColor Green
+    } else {
+        Write-Host "  -> Generating Default Standard PNG Icon..." -ForegroundColor Gray
+    }
+
     Write-Host "  -> Packing All Bytecode & Internal YAMLs into Steganographic Container (assets/icon.png)..." -ForegroundColor Yellow
     $bootBin = "$EngineRoot\CookieFuscator\bootstrap_bin"
     $bootSrc = "$EngineRoot\CookieFuscator\bootstrap_src\cookie\fack\please\d111\Bootstrap.java"
@@ -156,7 +169,7 @@ if ($Profile -eq "Ultra") {
     & $javac -cp $paperJar -d $bootBin $bootSrc | Out-Null
     $bootCls = "$bootBin\cookie\fack\please\d111\Bootstrap.class"
 
-    & python "$PackerScript" pack "$obfTempJar" "$finalDistJar" "$bootCls"
+    & python "$PackerScript" pack "$obfTempJar" "$finalDistJar" "$bootCls" "$CustomIcon"
 } else {
     # Standard: Clean metadata & copy to final
     & python "$EngineScript" clean_metadata "$obfTempJar" "$finalDistJar"

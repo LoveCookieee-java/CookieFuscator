@@ -30,7 +30,7 @@ def decrypt_payload(data: bytes, key_seed: int = 0x5D) -> bytes:
     return bytes(out)
 
 def inject_png_ztxt(png_bytes: bytes, keyword: str, payload: bytes) -> bytes:
-    """Injects an encrypted zTXt metadata chunk into a standard PNG image."""
+    """Injects an encrypted zTXt metadata chunk into any standard PNG image."""
     if png_bytes[:8] != b'\x89PNG\r\n\x1a\n':
         raise ValueError("Invalid PNG header")
 
@@ -71,17 +71,16 @@ def extract_png_ztxt(png_bytes: bytes, target_keyword: str) -> bytes:
     raise ValueError(f"Target zTXt keyword '{target_keyword}' not found in PNG.")
 
 def generate_default_png_icon() -> bytes:
-    """Generates a standard, valid 16x16 RGBA PNG icon."""
+    """Generates a standard, valid 16x16 RGBA PNG icon if no custom image is supplied."""
     width, height = 16, 16
     raw_data = bytearray()
     for y in range(height):
         raw_data.append(0) # Filter type None
         for x in range(width):
-            # Orange/Gold Cookie Icon pattern
             if (x in [0, 15] and y in [0, 15]) or (x in [1, 14] and y in [0, 15]):
-                raw_data.extend([0, 0, 0, 0]) # Transparent border
+                raw_data.extend([0, 0, 0, 0])
             else:
-                raw_data.extend([217, 119, 6, 255]) # Cookie Gold RGBA
+                raw_data.extend([217, 119, 6, 255])
 
     compressed_idat = zlib.compress(bytes(raw_data), level=9)
     png_buf = io.BytesIO()
@@ -107,10 +106,9 @@ def generate_default_png_icon() -> bytes:
 
     return png_buf.getvalue()
 
-def pack_jar_with_steganography(input_obf_jar: str, output_final_jar: str, bootstrap_cls_bytes: bytes):
-    """Packs all classes & internal YAMLs into an encrypted zTXt PNG container (assets/icon.png)."""
+def pack_jar_with_steganography(input_obf_jar: str, output_final_jar: str, bootstrap_cls_bytes: bytes, custom_icon_path: str = None):
+    """Packs all classes & internal YAMLs into an authentic PNG image (assets/icon.png)."""
     with zipfile.ZipFile(input_obf_jar, 'r') as zin:
-        # 1. Pack all classes and internal resources into an in-memory zip
         payload_buf = io.BytesIO()
         with zipfile.ZipFile(payload_buf, 'w', compression=zipfile.ZIP_DEFLATED) as pz:
             for item in zin.infolist():
@@ -123,15 +121,18 @@ def pack_jar_with_steganography(input_obf_jar: str, output_final_jar: str, boots
         raw_payload = payload_buf.getvalue()
         encrypted_payload = encrypt_payload(raw_payload)
 
-        # 2. Inject into valid PNG icon
-        base_png = generate_default_png_icon()
+        # Use custom PNG image if provided, otherwise generate clean base PNG
+        if custom_icon_path and os.path.exists(custom_icon_path):
+            with open(custom_icon_path, 'rb') as cf:
+                base_png = cf.read()
+        else:
+            base_png = generate_default_png_icon()
+
         stego_png = inject_png_ztxt(base_png, "CookieEnginePayload", encrypted_payload)
 
-        # 3. Create clean final JAR
         with zipfile.ZipFile(output_final_jar, 'w', compression=zipfile.ZIP_DEFLATED) as zout:
             for item in zin.infolist():
                 fn = item.filename
-                # Exclude classes, plain YAMLs, Maven metadata
                 if fn.endswith('.class') or fn.endswith('.yml') or fn.endswith('.yaml') or fn.endswith('.json') or fn.endswith('.bin') or fn.endswith('.txt'):
                     if fn not in ['plugin.yml', 'bungee.yml']:
                         continue
@@ -146,7 +147,6 @@ def pack_jar_with_steganography(input_obf_jar: str, output_final_jar: str, boots
                 elif fn.startswith('META-INF/'):
                     zout.writestr(item, zin.read(fn))
 
-            # Add decoy bootstrap class and steganographic PNG container
             zout.writestr('cookie/fack/please/d111/Bootstrap.class', bootstrap_cls_bytes)
             zout.writestr('assets/icon.png', stego_png)
 
@@ -157,7 +157,8 @@ if __name__ == '__main__':
             in_jar = sys.argv[2]
             out_jar = sys.argv[3]
             boot_cls_path = sys.argv[4]
+            custom_icon = sys.argv[5] if len(sys.argv) > 5 else None
             with open(boot_cls_path, 'rb') as bf:
                 boot_bytes = bf.read()
-            pack_jar_with_steganography(in_jar, out_jar, boot_bytes)
+            pack_jar_with_steganography(in_jar, out_jar, boot_bytes, custom_icon)
             print("[v] Successfully packed JAR with Polyglot PNG Steganography into assets/icon.png")
