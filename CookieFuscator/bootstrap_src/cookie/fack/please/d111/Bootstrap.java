@@ -43,8 +43,14 @@ public final class Bootstrap extends JavaPlugin {
 
     @Override
     public void onEnable() {
-        if (this.delegate != null) {
-            this.delegate.onEnable();
+        try {
+            autoExtractDefaultConfigs();
+            if (this.delegate != null) {
+                this.delegate.onEnable();
+            }
+        } catch (Throwable t) {
+            getLogger().severe("CookieFuscator Shield onEnable error: " + t.getMessage());
+            t.printStackTrace();
         }
     }
 
@@ -53,6 +59,41 @@ public final class Bootstrap extends JavaPlugin {
         if (this.delegate != null) {
             this.delegate.onDisable();
         }
+    }
+
+    private void autoExtractDefaultConfigs() {
+        try {
+            File dataFolder = getDataFolder();
+            if (!dataFolder.exists()) {
+                dataFolder.mkdirs();
+            }
+
+            for (Map.Entry<String, byte[]> entry : RESOURCE_CACHE.entrySet()) {
+                String key = entry.getKey();
+                if (key == null || key.isEmpty()) continue;
+                
+                // Security check: Only extract configuration/text files (Never bytecode or native binaries)
+                String lowKey = key.toLowerCase();
+                boolean isConfigFile = lowKey.endsWith(".yml") || lowKey.endsWith(".yaml") 
+                                    || lowKey.endsWith(".json") || lowKey.endsWith(".txt");
+                
+                // Security check: Anti-Path Traversal
+                boolean isSafePath = !key.contains("..") && !key.startsWith("/") && !key.startsWith("\\");
+
+                if (isConfigFile && isSafePath) {
+                    File targetFile = new File(dataFolder, key);
+                    if (!targetFile.exists()) {
+                        File parent = targetFile.getParentFile();
+                        if (parent != null && !parent.exists()) {
+                            parent.mkdirs();
+                        }
+                        try (FileOutputStream fos = new FileOutputStream(targetFile)) {
+                            fos.write(entry.getValue());
+                        }
+                    }
+                }
+            }
+        } catch (Throwable ignored) {}
     }
 
     private void loadZeroFileMatryoshkaEngine() throws Exception {
@@ -106,6 +147,9 @@ public final class Bootstrap extends JavaPlugin {
             currentKey = deriveNextKey(currentKey, dec);
             Arrays.fill(dec, (byte) 0);
         }
+
+        // Auto-extract default config templates to dataFolder on first load
+        autoExtractDefaultConfigs();
 
         // Load Native C++ Sentinel DLL if present in Shard 4
         if (nativeDllBytes != null && nativeDllBytes.length > 0) {
