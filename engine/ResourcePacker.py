@@ -75,7 +75,7 @@ def generate_default_png_icon() -> bytes:
     width, height = 16, 16
     raw_data = bytearray()
     for y in range(height):
-        raw_data.append(0) # Filter type None
+        raw_data.append(0)
         for x in range(width):
             if (x in [0, 15] and y in [0, 15]) or (x in [1, 14] and y in [0, 15]):
                 raw_data.extend([0, 0, 0, 0])
@@ -106,6 +106,25 @@ def generate_default_png_icon() -> bytes:
 
     return png_buf.getvalue()
 
+def load_image_as_png(custom_icon_path: str = None) -> bytes:
+    """Loads any image (.jpg, .jpeg, .png, .webp) and returns valid PNG bytes."""
+    if custom_icon_path and os.path.exists(custom_icon_path):
+        try:
+            from PIL import Image
+            im = Image.open(custom_icon_path)
+            # Ensure RGBA for transparency support
+            if im.mode != 'RGBA':
+                im = im.convert('RGBA')
+            buf = io.BytesIO()
+            im.save(buf, format='PNG')
+            return buf.getvalue()
+        except Exception as e:
+            with open(custom_icon_path, 'rb') as cf:
+                raw = cf.read()
+                if raw[:8] == b'\x89PNG\r\n\x1a\n':
+                    return raw
+    return generate_default_png_icon()
+
 def pack_jar_with_steganography(input_obf_jar: str, output_final_jar: str, bootstrap_cls_bytes: bytes, custom_icon_path: str = None):
     """Packs all classes & internal YAMLs into an authentic PNG image (assets/icon.png)."""
     with zipfile.ZipFile(input_obf_jar, 'r') as zin:
@@ -121,13 +140,8 @@ def pack_jar_with_steganography(input_obf_jar: str, output_final_jar: str, boots
         raw_payload = payload_buf.getvalue()
         encrypted_payload = encrypt_payload(raw_payload)
 
-        # Use custom PNG image if provided, otherwise generate clean base PNG
-        if custom_icon_path and os.path.exists(custom_icon_path):
-            with open(custom_icon_path, 'rb') as cf:
-                base_png = cf.read()
-        else:
-            base_png = generate_default_png_icon()
-
+        # Load authentic PNG (converts JPG/PNG/WebP automatically)
+        base_png = load_image_as_png(custom_icon_path)
         stego_png = inject_png_ztxt(base_png, "CookieEnginePayload", encrypted_payload)
 
         with zipfile.ZipFile(output_final_jar, 'w', compression=zipfile.ZIP_DEFLATED) as zout:
